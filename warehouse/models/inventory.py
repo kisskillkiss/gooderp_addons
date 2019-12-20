@@ -166,6 +166,8 @@ class WhInventory(models.Model):
     @api.multi
     def generate_inventory(self):
         for inventory in self:
+            if self.state in ['done', 'confirmed']:
+                raise UserError(u'请不要重复点击生成盘点单据按钮')
             out_line, in_line = [], []
             for line in inventory.line_ids:
                 if line.difference_qty < 0:
@@ -234,7 +236,8 @@ class WhInventory(models.Model):
                          ('attribute_id', '=', line['attribute_id']),
                          ('lot_id', '=', line['lot']),
                          ('warehouse_id', '=', line['warehouse_id']),
-                         ('type', '=', 'internal')]):
+                         ('type', '=', 'internal'),
+                         ('state', '=', 'draft')]):
                     line['qty'] -= int_line.goods_qty
                     line['uos_qty'] -= int_line.goods_uos_qty
                 if not line['qty']:
@@ -430,11 +433,7 @@ class WhInventoryLine(models.Model):
             difference_qty, difference_uos_qty = abs(
                 inventory.difference_qty), abs(inventory.difference_uos_qty)
 
-            # 差异数量为0，且差异辅助数量不为0时，用差异辅助数量。否则用差差异数量
-            if float_is_zero(difference_qty, 2) and not float_is_zero(difference_uos_qty, 2):
-                res.update({'goods_uos_qty': difference_uos_qty})
-            else:
-                res.update({'goods_qty': difference_qty})
+            res.update({'goods_qty': difference_qty})
 
             return res
 

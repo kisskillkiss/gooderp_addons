@@ -37,7 +37,7 @@
                 <button string="创建员工" name="create_employee_from_applicant" type="object"
                         class="oe_highlight" attrs="{'invisible': ['|',('staff_id', '!=', False),('active', '=', False)]}"/>
                 <button string="拒绝" name="archive_applicant" type="object" attrs="{'invisible': [('active', '=', False)]}"/>
-                <button string="重新打开申请" name="reset_applicant" type="object" attrs="{'invisible': [('active', '=', True)]}"/>
+                <button string="重新打开招聘" name="reset_applicant" type="object" attrs="{'invisible': [('active', '=', True)]}"/>
                 <field name="stage_id" widget="statusbar" clickable="True" options="{'fold_field': 'fold'}" attrs="{'invisible': [('active', '=', False),('staff_id', '=', False)]}"/>
             </header>
             <sheet>
@@ -191,7 +191,7 @@
         <field name="priority" eval="2"/>
         <field name="arch" type="xml">
             <calendar string="Applicants"
-                date_start="date_action" color="user_id">
+                date_start="date_action" color="user_id" quick_add="False">
                 <field name="partner_name"/>
                 <field name="title_action"/>
             </calendar>
@@ -266,7 +266,6 @@
         <field name="name">招聘</field>
         <field name="res_model">hire.applicant</field>
         <field name="view_mode">kanban,tree,form,graph,calendar,pivot</field>
-        <field name="context">{'search_default_job_id': [active_id], 'default_job_id': active_id}</field>
         <field name="help" type="html">
               <p>
                 Odoo helps you track applicants in the recruitment
@@ -284,7 +283,6 @@
         <field name="name">员工</field>
         <field name="res_model">staff</field>
         <field name="view_mode">kanban,tree,form</field>
-        <field name="context">{'search_default_job_id': active_id}</field>
         <field name="help" type="html">
               <p class="oe_view_nocontent_create">
                 Click to add a new employee.
@@ -303,9 +301,9 @@
         <field name="arch" type="xml">
             <sheet position="before">
                 <header>
-                    <button name="set_recruit" string="启动招聘" states="open" type="object" class="oe_highlight" groups="base.group_user"/>
-                    <button name="set_open" string="结束招聘" states="recruit" type="object" groups="base.group_user"/>
-                    <field name="state" widget="statusbar" statusbar_visible="recruit,open"/>
+                    <button name="set_open" string="启动招聘" states="close" type="object" class="oe_highlight" groups="base.group_user"/>
+                    <button name="set_close" string="结束招聘" states="open" type="object" groups="base.group_user"/>
+                    <field name="state" widget="statusbar" statusbar_visible="open,close"/>
                 </header>
             </sheet>
             <group name="staff_data" position="inside">

@@ -68,7 +68,7 @@ class TestVoucher(TransactionCase):
 
     def test_voucher_done_costs_types_in(self):
         '''收入类科目只能在贷方记账'''
-        voucher = self.env['voucher'].create({
+        voucher = self.env['voucher'].with_context({'entry_manual':1}).create({
             'date': '2017-01-01',
             'line_ids': [(0, 0, {
                 'name': u'退款给客户',  # 贷方行
@@ -84,6 +84,35 @@ class TestVoucher(TransactionCase):
                 })]
         })
         voucher.voucher_done()
+
+    def test_restricted_account(self):
+        ''' 测试受限的记账科目 '''
+        account_debit = self.env.ref('finance.small_business_chart1801')
+        account_debit.restricted_debit = True
+        self.env.ref('finance.account_chart1002').restricted_credit = True
+        account_credit = self.env.ref('finance.account_bank')
+
+        with self.assertRaises(UserError):
+            voucher = self.env['voucher'].with_context({'entry_manual':1}).create({
+                'date': '2017-01-01',
+                'line_ids': [(0, 0, {
+                    'name': u'受限科目记账',  # 贷方行
+                    'account_id': account_credit.id,
+                    'debit': 0,
+                    'credit': 50.0,
+                })]
+            })
+        with self.assertRaises(UserError):
+            voucher = self.env['voucher'].with_context({'entry_manual':1}).create({
+                'date': '2017-01-01',
+                'line_ids': [(0, 0, {
+                        'name': u'受限科目记账',  # 借方行
+                        'account_id': account_debit.id,
+                        'debit': 50.0,
+                        'credit': 0,
+                    })]
+            })
+        self.env.ref('finance.voucher_1').with_context({'entry_manual':1}).write({'note':'check on write'})
 
     def test_line_unlink(self):
         '''测试可正常删除未审核的凭证行'''
@@ -195,6 +224,7 @@ class TestVoucher(TransactionCase):
             "default_voucher_date": "last", })
 
         setting_row.execute()
+        self.env['ir.values'].set_default('finance.config.settings', 'default_voucher_date', 'last')
         voucher_obj._default_voucher_date()
         voucher_obj.create({})
 
@@ -204,15 +234,19 @@ class TestVoucherLine(TransactionCase):
         ''' Test: view document method '''
         self.env.ref('finance.voucher_line_1_debit').view_document()
 
+    def test_post_view(self):
+        ''' 只能往下级科目记账 '''
+        with self.assertRaises(ValidationError):
+            self.env.ref('finance.voucher_line_1_debit').account_id = self.env.ref('finance.account_chart1002')
 
 class TestPeriod(TransactionCase):
 
     def test_get_period(self):
         period_obj = self.env['finance.period']
+        # 如果对应会计期间不存在，则创建
         if not period_obj.search([('year', '=', '2100'),
                                   ('month', '=', '6')]):
-            with self.assertRaises(UserError):
-                period_obj.get_period('2100-06-20')
+            self.assertTrue(period_obj.get_period('2100-06-20').name, '210006')
         period_obj.get_year_fist_period_id()
         period_row = period_obj.search(
             [('year', '=', '2016'), ('month', '=', '10')])
@@ -315,6 +349,11 @@ class TestFinanceAccount(TransactionCase):
 
         self.assertEqual(result, real_result)
 
+        # 搜索输入的是编号 code 1001
+        result1 = self.env['finance.account'].name_search('1001')
+        real_result1 = [(self.cash.id, self.cash.code + ' ' + self.cash.name)]
+        self.assertEqual(result1, real_result1)
+
     def test_get_smallest_code_account(self):
         account = self.env['finance.account']
         account.get_smallest_code_account()
@@ -326,8 +365,83 @@ class TestFinanceAccount(TransactionCase):
     def test_compute_balance(self):
         """计算会计科目的当前余额"""
         self.cash.compute_balance()
+        self.cash.get_balance()
         self.assertEqual(self.cash.balance, 0)
 
+    def test_unlink(self):
+        ''' 测试删除科目 '''
+        # 界面上删除预设科目报错
+        with self.assertRaises(UserError):
+            self.cash.with_context({'modify_from_webclient':1}).unlink()
+        # 记过账的不能删除
+        with self.assertRaises(UserError):
+            self.env.ref('finance.account_bank').unlink()
+        # 有下级科目的不能删除
+        with self.assertRaises(UserError):
+            self.env.ref('finance.account_chart1002').unlink()
+        # 下级科目删光了就把上级科目改为可记账的科目
+        self.env.ref('finance.small_business_chart5603').child_ids.unlink()
+
+    def test_write(self):
+        ''' 测试删除科目 '''
+        # 界面上修改预设科目报错
+        with self.assertRaises(UserError):
+            self.cash.source = 'init'
+            self.cash.with_context({'modify_from_webclient': 1}).write({'source': 'init'})
+        # 界面上记过账科目不能修改
+        account_bank = self.env.ref('finance.account_bank')
+        with self.assertRaises(UserError):
+            account_bank.source = ''
+            account_bank.with_context({'modify_from_webclient': 1}).write({'source': 'init'})
+    def test_add_child(self):
+        ''' 测试增加子科目 '''
+        # 末级科目增加子科目
+        self.cash.button_add_child()
+        income = self.env.ref('finance.account_income')
+        wizard = self.env['wizard.account.add.child'].with_context(
+            {'active_id': income.id}
+            ).create({
+            'account_code': '01',
+            'account_name': '纸币',
+        })
+        wizard.create_account()
+        # 非末级科目增加子科目
+        wizard = self.env['wizard.account.add.child'].with_context(
+            {'active_id':self.env.ref('finance.small_business_chart1701').id}).create({
+            'account_code': '08',
+            'account_name': '',
+        })
+        wizard.create_account()
+        # 修改下级编码
+        wizard.account_code = '02'
+        wizard._onchange_account_code()
+        # 必须是数字
+        wizard.account_code = '02a'
+        wizard._onchange_account_code()
+        # 必须是2位
+        wizard.account_code = '021'
+        wizard._onchange_account_code()
+
+        # 选择的科目层级已经是最低层级科目了，不能建立在它下面建立下级科目！ 报错
+        self.env['ir.values'].set_default('finance.config.settings', 'default_account_hierarchy_level', '2')
+        business_chart170108 = self.env['finance.account'].search([('code', '=', '170108')])
+        with self.assertRaises(UserError):
+            wizard = self.env['wizard.account.add.child'].with_context({'active_id': business_chart170108.id}). \
+                create({
+                'account_code': '01',
+                'account_name': 'test'
+            })
+            wizard.create_account()
+
+    def test_add_child_multi(self):
+        with self.assertRaises(UserError):
+            wizard = self.env['wizard.account.add.child'].with_context(
+                {'active_ids':[self.cash.id,
+                            self.env.ref('finance.small_business_chart1701').id]}
+                ).create({
+                'account_code':'01',
+                'account_name':'纸币',
+            })
 
 class TestVoucherTemplateWizard(TransactionCase):
     def setUp(self):
@@ -439,6 +553,7 @@ class TestCheckoutWizard(TransactionCase):
                                                                         "default_auto_reset": True,
                                                                         "default_voucher_date": "today"})
         setting_row_month.execute()
+        self.env.ref('finance.period_201512').is_closed = True
         checkout_wizard_obj.recreate_voucher_name(period_id)
 
     def test_get_last_date(self):

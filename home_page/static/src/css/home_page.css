@@ -31,7 +31,7 @@
 
 
 .m-b-lg, .m-y-lg {
-    margin-bottom: 60px !important
+    margin-bottom: 80px !important
 }
 
 
@@ -39,7 +39,7 @@ article, aside, details, figcaption, figure, footer, header, hgroup, main, menu,
     display: block
 }
 
-.button-circle {width:30px;height:30px;border-radius:100px;}
+.button-circle {border-radius:100px;}
 .gooderp-colour { background-color:#9f5000;color: white}
 
 .gooderp-title {
@@ -50,4 +50,25 @@ article, aside, details, figcaption, figure, footer, header, hgroup, main, menu,
 .oe_quick_link{
     overflow:hidden;
     white-space:nowrap;
+}
+
+/* 小屏幕（平板，大于等于 768px） */
+@media (min-width: 768px) { 
+    .col-sm-1-5 {
+        width: 25%;
+    }
+}
+
+/* 中等屏幕（桌面显示器，大于等于 992px） */
+@media (min-width: 992px) { 
+    .col-sm-1-5 {
+        width: 20%;
+    }
+}
+
+/* 大屏幕（大桌面显示器，大于等于 1200px） */
+@media (min-width: 1200px) { 
+    .col-sm-1-5 {
+        width: 12.5%;
+    }
 }

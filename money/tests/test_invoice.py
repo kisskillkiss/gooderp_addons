@@ -60,8 +60,37 @@ class TestInvoice(TransactionCase):
                                                         'partner_id': supplier.id,
                                                         'category_id': self.env.ref('money.core_category_purchase').id,
                                                         'amount': 10.0})
-        invoice_buy.money_invoice_done()
         invoice_buy.money_invoice_draft()
+        # 只允许删除未审核的单据
+        invoice_unlink = self.env['money.invoice'].create({'name': '.',
+                                                           'date': "2016-02-20",
+                                                           'partner_id': supplier.id,
+                                                           'category_id': self.env.ref('money.core_category_purchase').id,
+                                                           'amount': 10.0})
+        invoice_unlink.unlink()
+
+    def test_write(self):
+        ''' Test: When change date_due, the one with the same bill_number update together '''
+        # 创建发票
+        invoice_obj = self.env['money.invoice']
+        invoice_1 = invoice_obj.create({'name': 'test_invoice_1',
+                                        'partner_id': self.env.ref('core.jd').id,
+                                        'date': "2016-02-20",
+                                        'category_id': self.env.ref('money.core_category_sale').id,
+                                        'amount': 10.0})
+        invoice_2 = invoice_obj.create({'name': 'test_invoice_2',
+                                        'partner_id': self.env.ref('core.yixun').id,
+                                        'date': "2016-02-26",
+                                        'category_id': self.env.ref('money.core_category_sale').id,
+                                        'amount': 20.0})
+        invoice_1.bill_number = '666'
+        invoice_2.bill_number = '666'
+        invoice_1.date_due = '2016-02-28'
+        invoice_1.money_invoice_draft()
+        invoice_2.money_invoice_draft()
+        # 结算单 不可重复撤销 报错
+        with self.assertRaises(UserError):
+            invoice_2.money_invoice_draft()
 
     def test_money_invoice_draft_voucher_done(self):
         '''发票生成的凭证已审核时，反审核发票'''
@@ -72,7 +101,6 @@ class TestInvoice(TransactionCase):
                                                         'partner_id': supplier.id,
                                                         'category_id': self.env.ref('money.core_category_purchase').id,
                                                         'amount': 10.0})
-        invoice_buy.money_invoice_done()
         invoice_buy.money_invoice_draft()
 
     def test_money_invoice_voucher_line_currency(self):
@@ -83,10 +111,10 @@ class TestInvoice(TransactionCase):
             'category_id': self.env.ref('money.core_category_sale').id,
             'amount': 10.0,
             'currency_id': self.env.ref('base.USD').id})
-        invoice.money_invoice_done()
 
     def test_money_invoice_company_no_tax_account(self):
         ''' 创建 进项税行 公司 进项税科目 未设置 '''
+        self.env.user.company_id.draft_invoice = True
         # 进项税行 import_tax_account
         buy_invoice = self.env['money.invoice'].create({
             'name': 'invoice', 'date': "2016-02-20",
@@ -107,6 +135,39 @@ class TestInvoice(TransactionCase):
         self.env.user.company_id.output_tax_account = False
         with self.assertRaises(UserError):
             sell_invoice.money_invoice_done()
+
+    def test_money_invoice_done_no_category_account(self):
+        '''结算单分类上无科目审核报错'''
+        self.env.user.company_id.draft_invoice = True
+        cate = self.env['core.category'].create({
+            'name': '测试客户类别',
+            'type': 'customer',
+        })
+        invoice = self.env['money.invoice'].create({
+            'name': 'invoice', 'date': "2016-02-20",
+            'partner_id': self.env.ref('core.lenovo').id,
+            'category_id': cate.id,
+            'amount': 10.0,
+            'tax_amount': 11.7})
+        with self.assertRaises(UserError):
+            invoice.money_invoice_done()
+
+    def test_money_invoice_done_no_partner_category_account(self):
+        '''结算单客户分类上无科目审核报错'''
+        self.env.user.company_id.draft_invoice = True
+        cate = self.env['core.category'].create({
+            'name': '测试客户类别',
+            'type': 'customer',
+        })
+        self.env.ref('core.jd').c_category_id = cate
+        invoice = self.env['money.invoice'].create({
+            'name': 'invoice', 'date': "2016-02-20",
+            'partner_id': self.env.ref('core.jd').id,
+            'category_id': self.env.ref('money.core_category_sale').id,
+            'amount': 10.0,
+            'tax_amount': 11.7})
+        with self.assertRaises(UserError):
+            invoice.money_invoice_done()
 
     def test_money_invoice_name_get(self):
         ''' 测试 money invoice name_get 方法 '''
@@ -138,6 +199,6 @@ class TestInvoice(TransactionCase):
             'category_id': self.env.ref('money.core_category_sale').id,
             'amount': 117,
             'tax_amount': 17,
-            'date_due': '2016-04-10',
         })
+        invoice.date_due = '2016-04-10'
         self.assertEqual(invoice.overdue_amount, 117)

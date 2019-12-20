@@ -201,6 +201,8 @@ class TestInventory(TransactionCase):
 
     def test_check_done_state_done(self):
         ''' Test: check_done state == 'done' '''
+        mouse_line = self.browse_ref('warehouse.wh_move_line_12')
+        mouse_line.action_done()
         for line in self.inventory.line_ids:
             if line.goods_id.name == u'鼠标':
                 mouse = line
@@ -211,6 +213,8 @@ class TestInventory(TransactionCase):
         # 此时鼠标数量-1，生成一个鼠标的出库单
         self.inventory.generate_inventory()
 
+        # 鼠标进行批号管理，出库行必须选择一个批号
+        self.inventory.out_id.line_out_ids[0].lot_id = mouse_line.id
         self.inventory.out_id.approve_order()
         self.inventory.out_id.cancel_approved_order()
 
@@ -250,3 +254,20 @@ class TestInventory(TransactionCase):
             'date': '2016-12-30',
             'goods': '鼠标',
         })
+
+    def test_generate_inventory_twice(self):
+        '''重复点击生成盘点单据按钮'''
+        self.inventory.query_inventory()
+        self.inventory.generate_inventory()
+        with self.assertRaises(UserError):
+            self.inventory.generate_inventory()
+
+    def test_inventory_line_get_difference_qty(self):
+        '''_get_difference_qty：difference_qty=0,difference_uos_qty!=0'''
+        for line in self.inventory.line_ids:
+            if line.goods_id.name == u'鼠标':
+                mouse = line
+
+            # 实际辅助数量少1个 实际数量为1
+            mouse.inventory_uos_qty = mouse.inventory_qty - 1
+            self.assertEqual(mouse.difference_qty, -1)

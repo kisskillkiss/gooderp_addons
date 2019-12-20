@@ -36,9 +36,6 @@ class TestReconcileOrder(TransactionCase):
 
     def test_adv_pay_to_get(self):
         '''测试核销单: 预收冲应收'''
-
-        self.get_invoice.money_invoice_done()
-
         reconcile = self.env.ref('money.reconcile_adv_pay_to_get')
         reconcile.partner_id = self.env.ref('core.jd').id
         reconcile.onchange_partner_id()
@@ -49,7 +46,6 @@ class TestReconcileOrder(TransactionCase):
     def test_adv_get_to_pay(self):
         '''测试核销单: 预付冲应付'''
         self.env.ref('money.pay_2000').money_order_done()
-        self.pay_invoice.money_invoice_done()
         reconcile = self.env.ref('money.reconcile_adv_get_to_pay')
         reconcile.partner_id = self.env.ref('core.lenovo').id
         reconcile.onchange_partner_id()
@@ -66,8 +62,6 @@ class TestReconcileOrder(TransactionCase):
         '''测试核销单: 应收冲应付'''
         self.env.ref('money.pay_2000').money_order_done()
         self.get_invoice.partner_id = self.env.ref('core.lenovo').id
-        self.get_invoice.money_invoice_done()
-        self.pay_invoice.money_invoice_done()
         reconcile = self.env.ref('money.reconcile_get_to_pay')
         reconcile.partner_id = self.env.ref('core.lenovo').id
         reconcile.onchange_partner_id()
@@ -76,7 +70,6 @@ class TestReconcileOrder(TransactionCase):
 
     def test_get_to_get(self):
         '''测试核销单: 应收转应收'''
-        self.get_invoice.money_invoice_done()
         reconcile = self.env.ref('money.reconcile_get_to_get')
         reconcile.partner_id = self.env.ref('core.jd').id
         reconcile.onchange_partner_id()
@@ -86,7 +79,6 @@ class TestReconcileOrder(TransactionCase):
     def test_pay_to_pay(self):
         '''测试核销单: 应付转应付'''
         self.get_invoice.partner_id = self.env.ref('core.lenovo').id
-        self.pay_invoice.money_invoice_done()
         reconcile = self.env.ref('money.reconcile_pay_to_pay')
         reconcile.partner_id = self.env.ref('core.lenovo').id
         reconcile.onchange_partner_id()
@@ -95,7 +87,6 @@ class TestReconcileOrder(TransactionCase):
 
     def test_reconcile_order(self):
         '''核销单审核reconcile_order_done()'''
-        self.get_invoice.money_invoice_done()
         reconcile = self.env.ref('money.reconcile_adv_pay_to_get')
         reconcile.partner_id = self.env.ref('core.jd').id
         reconcile.onchange_partner_id()
@@ -118,12 +109,10 @@ class TestReconcileOrder(TransactionCase):
             reconcile.unlink()
         # 未审核的核销单可删除
         self.env.ref('money.pay_2000').money_order_done()
-        self.pay_invoice.money_invoice_done()
         reconcile = self.env.ref('money.reconcile_get_to_pay')
         reconcile.partner_id = self.env.ref('core.lenovo').id
         reconcile.unlink()
         # 核销金额必须相同
-        self.pay_invoice.money_invoice_done()
         reconcile_adv_get_to_pay = self.env.ref(
             'money.reconcile_adv_get_to_pay')
         reconcile_adv_get_to_pay.partner_id = self.env.ref('core.lenovo').id
@@ -142,6 +131,57 @@ class TestReconcileOrder(TransactionCase):
                                                                         'state': 'done'})
         with self.assertRaises(UserError):
             reconcile_pay_to_pay_done.reconcile_order_done()
+
+    def test_reconcile_order_draft_adv_pay_to_get(self):
+        ''' Test: reconcile_order_draft: adv_pay_to_get  '''
+        # 预收冲应收
+        reconcile = self.env.ref('money.reconcile_adv_pay_to_get')
+        reconcile.partner_id = self.env.ref('core.jd').id
+        reconcile.onchange_partner_id()
+        reconcile.advance_payment_ids.to_reconcile = 300.0
+        reconcile.advance_payment_ids.this_reconcile = 300.0
+        reconcile.reconcile_order_done()
+        reconcile.reconcile_order_draft()
+
+        # 核销单已撤销，不能再次撤销 报错
+        with self.assertRaises(UserError):
+            reconcile.reconcile_order_draft()
+
+    def test_reconcile_order_draft_adv_get_to_pay(self):
+        ''' Test: reconcile_order_draft: adv_get_to_pay '''
+        self.env.ref('money.pay_2000').money_order_done()
+        # 预付冲应付
+        reconcile = self.env.ref('money.reconcile_adv_get_to_pay')
+        reconcile.partner_id = self.env.ref('core.lenovo').id
+        reconcile.onchange_partner_id()
+        reconcile.advance_payment_ids.to_reconcile = 600.0
+        reconcile.advance_payment_ids.this_reconcile = 600.0
+        reconcile.reconcile_order_done()
+        reconcile.reconcile_order_draft()
+
+        # 反核销时，金额不相同 报错
+        reconcile.reconcile_order_done()
+        with self.assertRaises(UserError):
+            reconcile.payable_source_ids.this_reconcile = 666.0
+            reconcile.reconcile_order_draft()
+
+    def test_reconcile_order_draft_pay_to_pay(self):
+        ''' Test: reconcile_order_draft: pay_to_pay '''
+        # 应收转应收
+        reconcile = self.env.ref('money.reconcile_pay_to_pay')
+        reconcile.partner_id = self.env.ref('core.lenovo').id
+        reconcile.onchange_partner_id()
+        reconcile.payable_source_ids.to_reconcile = 300.0
+        reconcile.payable_source_ids.this_reconcile = 300.0
+        reconcile.reconcile_order_done()
+        reconcile.reconcile_order_draft()
+
+        # 业务伙伴和转入往来单位不能相同 报错
+        reconcile.reconcile_order_done()
+        with self.assertRaises(UserError):
+            reconcile.to_partner_id = self.env.ref('core.lenovo').id
+            reconcile.onchange_partner_id()
+            reconcile.reconcile_order_draft()
 
     def test_onchange_partner_id(self):
         '''核销单onchange_partner_id()'''

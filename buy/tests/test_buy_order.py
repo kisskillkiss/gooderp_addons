@@ -28,6 +28,18 @@ class TestBuyOrder(TransactionCase):
         money.money_order_done()
         self.assertTrue(self.order.paid_amount == 1)
 
+    def test_get_paid_amount_pay_divided(self):
+        ''' 测试：分批付款时，购货订单付款/退款 '''
+        self.order.invoice_by_receipt = False
+        plan = self.env['payment.plan'].create({
+            'buy_id': self.order.id,
+            'name': 'first',
+            'amount_money': 10,
+        })
+        plan.request_payment()
+        # 生成的发票未核销，已付金额为0
+        self.assertTrue(self.order.paid_amount == 0)
+
     def test_onchange_discount_rate(self):
         ''' 优惠率改变时，改变优惠金额，成交金额也改变'''
         amount_before = self.order.amount
@@ -177,6 +189,7 @@ class TestBuyOrder(TransactionCase):
         new_order = self.order.copy()
         for line in new_order.line_ids:
             line.goods_id = self.env.ref('goods.mouse').id
+            line.lot = 'mouse001'
             new_order.buy_generate_receipt()
         receipt = self.env['buy.receipt'].search(
             [('order_id', '=', new_order.id)])
@@ -235,6 +248,24 @@ class TestBuyOrder(TransactionCase):
         self.order.receipt_ids[0].buy_receipt_done()
         self.order.action_view_receipt()
 
+    def test_action_view_return(self):
+        '''查看生成的采购退货单'''
+        self.order.type = 'return'
+        self.env.ref('buy.buy_order_line_1').goods_id = self.env.ref('goods.cable').id
+        self.env.ref('buy.buy_order_line_1').attribute_id = False
+        self.env.ref('warehouse.wh_in_whin0').warehouse_dest_id = self.env.ref('warehouse.sh_stock').id
+        self.env.ref('warehouse.wh_in_whin0').approve_order()
+        # 生成一张采购退货单
+        self.order.buy_order_done()
+        self.order.action_view_return()
+        # 生成两张采购退货单
+        self.order.buy_order_draft()
+        self.order.buy_order_done()
+        for line in self.order.receipt_ids[0].line_out_ids:
+            line.goods_qty = 3
+        self.order.receipt_ids[0].buy_receipt_done()
+        self.order.action_view_return()
+
     def test_action_view_invoice(self):
         '''查看生成的结算单'''
         # 生成一张入库单，审核后查看结算单
@@ -263,6 +294,12 @@ class TestBuyOrder(TransactionCase):
             line.goods_qty = 1
         receipt.buy_receipt_done()
         self.order.action_view_receipt()
+
+    def test_buy_order_done_no_attribute(self):
+        '''检查属性是否填充'''
+        self.order.line_ids[0].attribute_id = False
+        with self.assertRaises(UserError):
+            self.order.buy_order_done()
 
 
 class TestBuyOrderLine(TransactionCase):

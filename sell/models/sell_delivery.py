@@ -110,6 +110,12 @@ class SellDelivery(models.Model):
     origin_id = fields.Many2one('sell.delivery', u'来源单据')
     voucher_id = fields.Many2one('voucher', u'出库凭证', readonly=True,
                                  help=u'发货时产生的出库凭证')
+    money_order_id = fields.Many2one(
+        'money.order',
+        u'收款单',
+        readonly=True,
+        copy=False,
+        help=u'输入本次收款确认时产生的收款单')
 
     @api.onchange('address_id')
     def onchange_address_id(self):
@@ -134,17 +140,7 @@ class SellDelivery(models.Model):
                 self.address_id = partners_add[0].id
 
             for line in self.line_out_ids:
-                if line.goods_id.tax_rate and self.partner_id.tax_rate:
-                    if line.goods_id.tax_rate >= self.partner_id.tax_rate:
-                        line.tax_rate = self.partner_id.tax_rate
-                    else:
-                        line.tax_rate = line.goods_id.tax_rate
-                elif line.goods_id.tax_rate and not self.partner_id.tax_rate:
-                    line.tax_rate = line.goods_id.tax_rate
-                elif not line.goods_id.tax_rate and self.partner_id.tax_rate:
-                    line.tax_rate = self.partner_id.tax_rate
-                else:
-                    line.tax_rate = self.env.user.company_id.output_tax_rate
+                line.tax_rate = line.goods_id.get_tax_rate(line.goods_id, self.partner_id, 'sell')
 
             address_list = [
                 child_list.id for child_list in self.partner_id.child_ids]
@@ -207,7 +203,7 @@ class SellDelivery(models.Model):
     def _wrong_delivery_done(self):
         '''审核时不合法的给出报错'''
         if self.state == 'done':
-            raise UserError(u'请不要重复发货！')
+            raise UserError(u'请不要重复发货')
         for line in self.line_in_ids:
             if line.goods_qty <= 0 or line.price_taxed < 0:
                 raise UserError(u'商品 %s 的数量和商品含税单价不能小于0！' % line.goods_id.name)
@@ -225,7 +221,7 @@ class SellDelivery(models.Model):
                                  precision_digits=decimal_amount.digits) == 1:
                     raise UserError(u'本次发货金额 + 客户应收余额 - 本次收款金额 不能大于客户信用额度！\n\
                      本次发货金额:%s\n 客户应收余额:%s\n 本次收款金额:%s\n客户信用额度:%s' % (
-                        amount, self.receipt, self.partner_id.receivable, self.partner_id.credit_limit))
+                        amount, self.partner_id.receivable, self.receipt, self.partner_id.credit_limit))
 
     def _line_qty_write(self):
         if self.order_id:
@@ -357,14 +353,12 @@ class SellDelivery(models.Model):
         line_ids = self.is_return and self.line_in_ids or self.line_out_ids
         for line in line_ids:   # 发货单/退货单明细
             cost = self.is_return and -line.cost or line.cost
-
-            if cost:  # 贷方明细
+            if not cost:
+                continue    # 缺货审核发货单时不产生出库凭证
+            else:  # 贷方明细
                 sum_amount += cost
                 self._create_voucher_line(line.goods_id.category_id.account_id,
                                           0, cost, voucher, line.goods_id, line.goods_qty)
-            else:
-                # 缺货审核发货单时不产生出库凭证
-                continue
         if sum_amount:  # 借方明细
             self._create_voucher_line(self.sell_move_id.finance_category_id.account_id,
                                       sum_amount, 0, voucher, False, 0)
@@ -452,14 +446,10 @@ class SellDelivery(models.Model):
                 voucher = record.create_voucher()
             # 发货单/退货单 生成结算单
             invoice_id = record._delivery_make_invoice()
-            record.write({
-                'voucher_id': voucher and voucher.id,
-                'invoice_id': invoice_id and invoice_id.id,
-                'state': 'done',  # 为保证审批流程顺畅，否则，未审批就可审核
-            })
             # 销售费用产生结算单
             record._sell_amount_to_invoice()
             # 生成收款单，并审核
+            money_order = False
             if record.receipt:
                 flag = not record.is_return and 1 or -1
                 amount = flag * (record.amount + record.partner_cost)
@@ -467,6 +457,13 @@ class SellDelivery(models.Model):
                 money_order = record._make_money_order(
                     invoice_id, amount, this_reconcile)
                 money_order.money_order_done()
+
+            record.write({
+                'voucher_id': voucher and voucher.id,
+                'invoice_id': invoice_id and invoice_id.id,
+                'money_order_id': money_order and money_order.id,
+                'state': 'done',  # 为保证审批流程顺畅，否则，未审批就可审核
+            })
 
             # 先收款后发货订单自动核销
             self.auto_reconcile_sell_order()
@@ -481,11 +478,14 @@ class SellDelivery(models.Model):
     @api.one
     def sell_delivery_draft(self):
         '''反审核销售发货单/退货单，更新本单的收款状态/退款状态，并删除生成的结算单、收款单及凭证'''
+        if self.state == 'draft':
+            raise UserError(u'请不要重复撤销')
         # 查找产生的收款单
         source_line = self.env['source.order.line'].search(
             [('name', '=', self.invoice_id.id)])
         for line in source_line:
-            line.money_id.money_order_draft() # 反审核收款单
+            if line.money_id.state == 'done':
+                line.money_id.money_order_draft() # 反审核收款单
             # 判断收款单 源单行 是否有别的行存在
             other_source_line = []
             for s_line in line.money_id.source_ids:
@@ -508,13 +508,18 @@ class SellDelivery(models.Model):
                 raise UserError(u'发货单已核销，不能撤销发货！')
         invoice_ids.money_invoice_draft()
         invoice_ids.unlink()
+        # 删除产生的出库凭证
+        voucher = self.voucher_id
+        if voucher and voucher.state == 'done':
+            voucher.voucher_draft()
+        voucher.unlink()
         # 如果存在分单，则将差错修改中置为 True，再次审核时不生成分单
         self.write({
             'modifying': False,
             'state': 'draft',
         })
-        delivery_ids = self.search(
-            [('order_id', '=', self.order_id.id)])
+        delivery_ids = self.order_id and self.search(
+            [('order_id', '=', self.order_id.id)]) or []
         if len(delivery_ids) > 1:
             self.write({
                 'modifying': True,
@@ -522,17 +527,17 @@ class SellDelivery(models.Model):
             })
         # 将原始订单中已执行数量清零
         if self.order_id:
-            line_ids = self.is_return and self.line_in_ids or self.line_out_ids
-            for line in line_ids:
+            for line in self.line_out_ids:
                 line.sell_line_id.quantity_out -= line.goods_qty
+            for line in self.line_in_ids:
+                if self.order_id.type == 'return':
+                    line.sell_line_id.quantity_out -= line.goods_qty
+                else:
+                    line.sell_line_id.quantity_out += line.goods_qty
         # 调用wh.move中反审核方法，更新审核人和审核状态
         self.sell_move_id.cancel_approved_order()
 
-        # 删除产生的出库凭证
-        voucher, self.voucher_id = self.voucher_id, False
-        if voucher and voucher.state == 'done':
-            voucher.voucher_draft()
-        voucher.unlink()
+        return True
 
     @api.multi
     def sell_to_return(self):
@@ -580,6 +585,7 @@ class SellDelivery(models.Model):
                     'price': line.price,
                     'tax_rate':line.tax_rate,
                     'cost_unit': line.cost_unit,
+                    'cost': line.cost,#退货取不到成本
                     'discount_rate': line.discount_rate,
                     'discount_amount': line.discount_amount,
                     'type': 'in',

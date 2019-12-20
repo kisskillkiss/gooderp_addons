@@ -3,12 +3,16 @@
 from utils import safe_division
 from odoo.exceptions import UserError
 from odoo import models, fields, api
+import odoo.addons.decimal_precision as dp
 
 
 class Goods(models.Model):
     _inherit = 'goods'
 
     net_weight = fields.Float(u'净重')
+    current_qty = fields.Float(u'当前数量', compute='compute_stock_qty', digits=dp.get_precision('Quantity'))
+    max_stock_qty = fields.Float(u'库存上限', digits=dp.get_precision('Quantity'))
+    min_stock_qty = fields.Float(u'库存下限', digits=dp.get_precision('Quantity'))
 
     # 使用SQL来取得指定商品情况下的库存数量
     def get_stock_qty(self):
@@ -29,6 +33,10 @@ class Goods(models.Model):
             ''' % (Goods.id,))
 
             return self.env.cr.dictfetchall()
+
+    @api.one
+    def compute_stock_qty(self):
+        self.current_qty = sum(line.get('qty') for line in self.get_stock_qty())
 
     def _get_cost(self, warehouse=None, ignore=None):
         # 如果没有历史的剩余数量，计算最后一条move的成本
@@ -115,8 +123,8 @@ class Goods(models.Model):
                  'expiration_date': lot_id.expiration_date}], \
             lot_id.get_real_cost_unit() * qty
 
-    def get_matching_records(self, warehouse, qty, uos_qty=0,
-                             attribute=None, ignore_stock=False, ignore=None):
+    def get_matching_records(self, warehouse, qty, uos_qty=0, attribute=None,
+                             ignore_stock=False, ignore=None, move_line=False):
         """
         获取匹配记录，不考虑批号
         :param ignore_stock: 当参数指定为True的时候，此时忽略库存警告
@@ -144,6 +152,10 @@ class Goods(models.Model):
             if self.env.context.get('location'):
                 domain.append(
                     ('location_id', '=', self.env.context.get('location')))
+
+            # 出库单行 填写了库位
+            if not self.env.context.get('location') and move_line and move_line.location_id:
+                domain.append(('location_id', '=', move_line.location_id.id))
 
             # TODO @zzx需要在大量数据的情况下评估一下速度
             # 出库顺序按 库位 就近、先到期先出、先进先出
@@ -181,3 +193,10 @@ class Goods(models.Model):
                                                  'qty': qty_to_go, 'uos_qty': uos_qty_to_go})
 
             return matching_records, cost
+
+    @api.multi
+    def write(self, vals):
+        for goods in self:
+            if (vals.get('uom_id') or vals.get('uos_id') or vals.get('conversion')) and goods.current_qty:
+                raise UserError(u'商品有库存，不允许修改单位或转化率')
+            return super(Goods, self).write(vals)

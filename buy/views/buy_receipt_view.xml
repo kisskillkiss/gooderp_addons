@@ -75,7 +75,7 @@
 		                    	'type':'in',
 		                    	}">
 		                    	<tree string="Buy Receipt Lines" editable="bottom">
-		                            <field name="goods_id" required='1'
+		                            <field name="goods_id" required='1' domain="[('not_buyable','=',False)]"
 		                            	context="{'default_partner':parent.partner_id,
 		         								  'default_is_return':parent.is_return}"/>
 		                            <field name="attribute_id"
@@ -84,7 +84,9 @@
 		                            	attrs="{'required': [('using_attribute','=', True)], 'readonly': [('using_attribute','!=', True)],}"/>
 		                            <field name='lot' groups='goods.batch_groups'
 											attrs="{'readonly': [('using_batch', '=', False)], 'required': [('using_batch', '=', True)]}"/>
-                                    <field name='location_id' groups="warehouse.multi_location_groups" options="{'no_open': True, 'no_create': True}" domain="['&amp;',('warehouse_id', '=', parent.warehouse_dest_id),'|',('goods_id', '=', goods_id),('goods_id', '=', False)]"/>
+                                    <field name='location_id' groups="warehouse.multi_location_groups"
+                                           options="{'no_open': True, 'no_create': True}"
+                                           domain="['&amp;',('warehouse_id', '=', parent.warehouse_dest_id),'|',('goods_id', '=', goods_id),('goods_id', '=', False)]"/>
 		                            <field name="goods_uos_qty" sum="合计辅助数量"
 		                            	groups="goods.auxiliary_unit_groups"/>
 		                            <field name='uos_id' groups='goods.auxiliary_unit_groups' />
@@ -151,6 +153,9 @@
                                                         'invisible': [('invoice_by_receipt','=',False)]}"
                                    groups='buy.group_buy'
                             />
+                            <field name="money_order_id" attrs="{'invisible': [('invoice_by_receipt','=',False)]}"
+                                   groups='buy.group_buy'
+                            />
                         </group>
                     </group>
                     <group>
@@ -197,6 +202,16 @@
                         <filter string="到期日" domain="[]" context="{'group_by':'date_due:day'}"/>
                     </group>
                 </search>
+            </field>
+        </record>
+        <record id="buy_receipt_calendar" model="ir.ui.view">
+            <field name="name">buy.receipt.calendar</field>
+            <field name="model">buy.receipt</field>
+            <field name="arch" type="xml">
+                <calendar color="user_id" date_start="date_due" quick_add="False" string="采购入库单">
+                    <field name="name"/>
+                    <field name="partner_id"/>
+                </calendar>
             </field>
         </record>
 
@@ -272,7 +287,7 @@
 		                    	'default_warehouse_id': warehouse_id,
 		                    	}">
 		                    	<tree string="Buy Receipt Lines" editable="bottom">
-		                            <field name="goods_id" required='1'
+		                            <field name="goods_id" required='1' domain="[('not_buyable','=',False)]"
 		                            	context="{'default_partner':parent.partner_id,
 		         								  'default_is_return':parent.is_return}"/>
 		                            <field name="attribute_id"
@@ -283,6 +298,10 @@
                     					domain="[('goods_id', '=', goods_id), ('state', '=', 'done'), ('lot', '!=', False), ('qty_remaining', '>', 0), ('warehouse_dest_id', '=', parent.warehouse_id)]"
                     					context="{'lot': True}" options="{'no_open': True, 'no_create': True}"
                     					groups='goods.batch_groups'/>
+                                    <field name="location_id"
+                                           groups="warehouse.multi_location_groups"
+                                           options="{'no_open': True, 'no_create': True}"
+                                           domain="[('warehouse_id','=',parent.warehouse_id),('goods_id', '=', goods_id)]"/>
                     				<field name="goods_uos_qty" sum="合计辅助数量"
 		                            	groups="goods.auxiliary_unit_groups"/>
 		                            <field name='uos_id' groups='goods.auxiliary_unit_groups' />
@@ -341,6 +360,7 @@
                             <field name="bank_account_id" attrs="{'readonly': [('state','!=','draft')]}"
                                    groups='buy.group_buy'
                             />
+                            <field name="money_order_id" groups='buy.group_buy'/>
                         </group>
                     </group>
                     <group>

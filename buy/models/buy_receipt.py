@@ -45,6 +45,7 @@ class BuyReceipt(models.Model):
                 self.money_state = u'部分付款'
             elif self.invoice_id.reconciled == self.invoice_id.amount:
                 self.money_state = u'全部付款'
+
         # 返回退款状态
         if self.is_return:
             if self.invoice_id.reconciled == 0:
@@ -98,16 +99,23 @@ class BuyReceipt(models.Model):
                                store=True, default=u'未退款',
                                help=u"采购退货单的退款状态",
                                index=True, copy=False)
-    modifying = fields.Boolean(u'差错修改中', default=False,
+    modifying = fields.Boolean(u'差错修改中', default=False, copy=False,
                                help=u'是否处于差错修改中')
     voucher_id = fields.Many2one('voucher', u'入库凭证', readonly=True,
+                                 copy=False,
                                  help=u'入库时产生的入库凭证')
-    origin_id = fields.Many2one('buy.receipt', u'来源单据')
+    origin_id = fields.Many2one('buy.receipt', u'来源单据', copy=False)
     currency_id = fields.Many2one('res.currency',
                                   u'外币币别',
                                   readonly=True,
                                   help=u'外币币别')
     delivery_fee = fields.Float(u'运费')
+    money_order_id = fields.Many2one(
+        'money.order',
+        u'付款单',
+        readonly=True,
+        copy=False,
+        help=u'输入本次付款确认时产生的付款单')
 
     def _compute_total(self, line_ids):
         return sum(line.subtotal for line in line_ids)
@@ -124,17 +132,7 @@ class BuyReceipt(models.Model):
     def onchange_partner_id(self):
         if self.partner_id:
             for line in self.line_in_ids:
-                if line.goods_id.tax_rate and self.partner_id.tax_rate:
-                    if line.goods_id.tax_rate >= self.partner_id.tax_rate:
-                        line.tax_rate = self.partner_id.tax_rate
-                    else:
-                        line.tax_rate = line.goods_id.tax_rate
-                elif line.goods_id.tax_rate and not self.partner_id.tax_rate:
-                    line.tax_rate = line.goods_id.tax_rate
-                elif not line.goods_id.tax_rate and self.partner_id.tax_rate:
-                    line.tax_rate = self.partner_id.tax_rate
-                else:
-                    line.tax_rate = self.env.user.company_id.import_tax_rate
+                line.tax_rate = line.goods_id.get_tax_rate(line.goods_id, self.partner_id, 'buy')
 
     def get_move_origin(self, vals):
         return self._name + (self.env.context.get('is_return') and
@@ -164,7 +162,7 @@ class BuyReceipt(models.Model):
     @api.one
     def _wrong_receipt_done(self):
         if self.state == 'done':
-            raise UserError(u'请不要重复入库！')
+            raise UserError(u'请不要重复入库')
         batch_one_list_wh = []
         batch_one_list = []
         for line in self.line_in_ids:
@@ -186,9 +184,6 @@ class BuyReceipt(models.Model):
             if line.goods_qty <= 0 or line.price_taxed < 0:
                 raise UserError(u'商品 %s 的数量和含税单价不能小于0！' % line.goods_id.name)
             if line.goods_id.force_batch_one:
-                if line.goods_qty > 1:
-                    raise UserError(u'商品 %s 进行了序列号管理，数量必须为1' %
-                                    line.goods_id.name)
                 batch_one_list.append((line.goods_id.id, line.lot))
 
         if len(batch_one_list) > len(set(batch_one_list)):
@@ -220,8 +215,11 @@ class BuyReceipt(models.Model):
         if self.order_id:
             for line in self.line_in_ids:
                 line.buy_line_id.quantity_in += line.goods_qty
-            for line in self.line_out_ids:
-                line.buy_line_id.quantity_in -= line.goods_qty
+            for line in self.line_out_ids:  # 退货单行
+                if self.order_id.type == 'return':  # 退货类型的buy_order生成的采购退货单审核
+                    line.buy_line_id.quantity_in += line.goods_qty
+                else:
+                    line.buy_line_id.quantity_in -= line.goods_qty
 
         return
 
@@ -392,19 +390,21 @@ class BuyReceipt(models.Model):
 
         # 入库单/退货单 生成结算单
         invoice_id = self._receipt_make_invoice()
-        self.write({
-            'voucher_id': voucher and voucher.id,
-            'invoice_id': invoice_id and invoice_id.id,
-            'state': 'done',    # 为保证审批流程顺畅，否则，未审批就可审核
-        })
         # 采购费用产生结算单
         self._buy_amount_to_invoice()
         # 生成付款单
+        money_order = False
         if self.payment:
             flag = not self.is_return and 1 or -1
             amount = flag * self.amount
             this_reconcile = flag * self.payment
-            self._make_payment(invoice_id, amount, this_reconcile)
+            money_order = self._make_payment(invoice_id, amount, this_reconcile)
+        self.write({
+            'voucher_id': voucher and voucher.id,
+            'invoice_id': invoice_id and invoice_id.id,
+            'money_order_id': money_order and money_order.id,
+            'state': 'done',  # 为保证审批流程顺畅，否则，未审批就可审核
+        })
         # 生成分拆单 FIXME:无法跳转到新生成的分单
         if self.order_id and not self.modifying:
             # 如果已退货也已退款，不生成新的分单
@@ -415,11 +415,14 @@ class BuyReceipt(models.Model):
     @api.one
     def buy_receipt_draft(self):
         '''反审核采购入库单/退货单，更新本单的付款状态/退款状态，并删除生成的结算单、付款单及凭证'''
+        if self.state == 'draft':
+            raise UserError(u'请不要重复撤销')
         # 查找产生的付款单
         source_line = self.env['source.order.line'].search(
             [('name', '=', self.invoice_id.id)])
         for line in source_line:
-            line.money_id.money_order_draft()  # 反审核付款单
+            if line.money_id.state == 'done':
+                line.money_id.money_order_draft()  # 反审核付款单
             # 判断付款单 源单行 是否有别的行存在
             other_source_line = []
             for s_line in line.money_id.source_ids:
@@ -435,15 +438,22 @@ class BuyReceipt(models.Model):
         # 查找产生的结算单
         invoice_ids = self.env['money.invoice'].search(
             [('name', '=', self.invoice_id.name)])
-        invoice_ids.money_invoice_draft()
-        invoice_ids.unlink()
+        for invoice in invoice_ids:
+            if invoice.state == 'done':
+                invoice.money_invoice_draft()
+            invoice.unlink()
+        # 反审核采购入库单时删除对应的入库凭证
+        voucher = self.voucher_id
+        if voucher.state == 'done':
+            voucher.voucher_draft()
+        voucher.unlink()
         # 如果存在分单，则将差错修改中置为 True，再次审核时不生成分单
         self.write({
             'modifying': False,
             'state': 'draft',
         })
-        receipt_ids = self.search(
-            [('order_id', '=', self.order_id.id)])
+        receipt_ids = self.order_id and self.search(
+            [('order_id', '=', self.order_id.id)]) or []
         if len(receipt_ids) > 1:
             self.write({
                 'modifying': True,
@@ -451,17 +461,15 @@ class BuyReceipt(models.Model):
             })
         # 修改订单行中已执行数量
         if self.order_id:
-            line_ids = not self.is_return and self.line_in_ids or self.line_out_ids
-            for line in line_ids:
+            for line in self.line_in_ids:
                 line.buy_line_id.quantity_in -= line.goods_qty
+            for line in self.line_out_ids:
+                if self.order_id.type == 'return':
+                    line.buy_line_id.quantity_in -= line.goods_qty
+                else:
+                    line.buy_line_id.quantity_in += line.goods_qty
         # 调用wh.move中反审核方法，更新审核人和审核状态
         self.buy_move_id.cancel_approved_order()
-
-        # 反审核采购入库单时删除对应的入库凭证
-        voucher, self.voucher_id = self.voucher_id, False
-        if voucher.state == 'done':
-            voucher.voucher_draft()
-        voucher.unlink()
 
     @api.one
     def buy_share_cost(self):
@@ -524,8 +532,6 @@ class BuyReceipt(models.Model):
                     'discount_amount': line.discount_amount,
                     'type': 'out'
                 }
-                if line.goods_id.using_batch:
-                    dic.update({'lot_id': line.id})
                 receipt_line.append(dic)
         if len(receipt_line) == 0:
             raise UserError(u'该订单已全部退货！')

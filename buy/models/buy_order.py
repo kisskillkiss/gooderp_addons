@@ -81,22 +81,32 @@ class BuyOrder(models.Model):
     @api.one
     def _get_paid_amount(self):
         '''计算购货订单付款/退款状态'''
-        receipts = self.env['buy.receipt'].search([('order_id', '=', self.id)])
-        money_order_rows = self.env['money.order'].search([('buy_id', '=', self.id),
-                                                           ('reconciled', '=', 0),
-                                                           ('state', '=', 'done')])
-        self.paid_amount = sum([receipt.invoice_id.reconciled for receipt in receipts]) +\
-            sum([order_row.amount for order_row in money_order_rows])
+        if not self.invoice_by_receipt: # 分期付款时
+            money_invoices = self.env['money.invoice'].search([
+                ('name', '=', self.name),
+                ('state', '=', 'done')])
+            self.paid_amount = sum([invoice.reconciled for invoice in money_invoices])
+        else:
+            receipts = self.env['buy.receipt'].search([('order_id', '=', self.id)])
+            # 购货订单上输入预付款时
+            money_order_rows = self.env['money.order'].search([('buy_id', '=', self.id),
+                                                               ('reconciled', '=', 0),
+                                                               ('state', '=', 'done')])
+            self.paid_amount = sum([receipt.invoice_id.reconciled for receipt in receipts]) +\
+                sum([order_row.amount for order_row in money_order_rows])
 
     @api.depends('receipt_ids')
     def _compute_receipt(self):
         for order in self:
-            order.receipt_count = len(order.receipt_ids.ids)
+            order.receipt_count = len([receipt for receipt in order.receipt_ids if not receipt.is_return])
+            order.return_count = len([receipt for receipt in order.receipt_ids if receipt.is_return])
 
     @api.depends('receipt_ids')
     def _compute_invoice(self):
         for order in self:
-            order.invoice_ids = order.receipt_ids.mapped('invoice_id')
+            money_invoices = self.env['money.invoice'].search([
+                ('name', '=', order.name)])
+            order.invoice_ids = not money_invoices and order.receipt_ids.mapped('invoice_id') or money_invoices + order.receipt_ids.mapped('invoice_id')
             order.invoice_count = len(order.invoice_ids.ids)
 
     @api.one
@@ -211,9 +221,11 @@ class BuyOrder(models.Model):
     goods_id = fields.Many2one(
         'goods', related='line_ids.goods_id', string=u'商品')
     receipt_ids = fields.One2many(
-        'buy.receipt', 'order_id', string='Receptions', copy=False)
+        'buy.receipt', 'order_id', string=u'入库单', copy=False)
     receipt_count = fields.Integer(
-        compute='_compute_receipt', string='Receptions Count', default=0)
+        compute='_compute_receipt', string=u'入库单数量', default=0)
+    return_count = fields.Integer(
+        compute='_compute_receipt', string=u'退货单数量', default=0)
     invoice_ids = fields.One2many(
         'money.invoice', compute='_compute_invoice', string='Invoices')
     invoice_count = fields.Integer(
@@ -238,6 +250,13 @@ class BuyOrder(models.Model):
         default=lambda self: self.env['res.company']._company_default_get())
     paid_amount = fields.Float(
         u'已付金额', compute=_get_paid_amount, readonly=True)
+    money_order_id = fields.Many2one(
+        'money.order',
+        u'预付款单',
+        readonly=True,
+        copy=False,
+        help=u'输入预付款确认时产生的预付款单')
+
 
     @api.onchange('discount_rate', 'line_ids')
     def onchange_discount_rate(self):
@@ -249,17 +268,7 @@ class BuyOrder(models.Model):
     def onchange_partner_id(self):
         if self.partner_id:
             for line in self.line_ids:
-                if line.goods_id.tax_rate and self.partner_id.tax_rate:
-                    if line.goods_id.tax_rate >= self.partner_id.tax_rate:
-                        line.tax_rate = self.partner_id.tax_rate
-                    else:
-                        line.tax_rate = line.goods_id.tax_rate
-                elif line.goods_id.tax_rate and not self.partner_id.tax_rate:
-                    line.tax_rate = line.goods_id.tax_rate
-                elif not line.goods_id.tax_rate and self.partner_id.tax_rate:
-                    line.tax_rate = self.partner_id.tax_rate
-                else:
-                    line.tax_rate = self.env.user.company_id.import_tax_rate
+                line.tax_rate = line.goods_id.get_tax_rate(line.goods_id, self.partner_id, 'buy')
 
     def _get_vals(self):
         '''返回创建 money_order 时所需数据'''
@@ -285,7 +294,6 @@ class BuyOrder(models.Model):
             'buy_id': self.id,
         }
 
-    @api.one
     def generate_payment_order(self):
         '''由购货订单生成付款单'''
         # 入库单/退货单
@@ -303,6 +311,9 @@ class BuyOrder(models.Model):
         if not self.line_ids:
             raise UserError(u'请输入商品明细行')
         for line in self.line_ids:
+            # 检查属性是否填充，防止无权限人员不填就可以保存
+            if line.using_attribute and not line.attribute_id:
+                raise UserError(u'请输入商品：%s 的属性' % line.goods_id.name)
             if line.quantity <= 0 or line.price_taxed < 0:
                 raise UserError(u'商品 %s 的数量和含税单价不能小于0' % line.goods_id.name)
             if line.tax_amount > 0 and self.currency_id:
@@ -310,10 +321,14 @@ class BuyOrder(models.Model):
         if not self.bank_account_id and self.prepayment:
             raise UserError(u'预付款不为空时，请选择结算账户')
         # 采购预付款生成付款单
-        self.generate_payment_order()
+        money_order = self.generate_payment_order()
         self.buy_generate_receipt()
-        self.state = 'done'
+
         self.approve_uid = self._uid
+        self.write({
+            'money_order_id': money_order and money_order.id,
+            'state': 'done',  # 为保证审批流程顺畅，否则，未审批就可审核
+        })
 
     @api.one
     def buy_order_draft(self):
@@ -327,14 +342,12 @@ class BuyOrder(models.Model):
             [('order_id', '=', self.name)])
         receipt.unlink()
         # 查找产生的付款单并撤销确认，删除
-        money_order = self.env['money.order'].search(
-            [('origin_name', '=', self.name)])
-        if money_order:
-            if money_order.state == 'done':
-                money_order.money_order_draft()
-            money_order.unlink()
-        self.state = 'draft'
+        if self.money_order_id:
+            if self.money_order_id.state == 'done':
+                self.money_order_id.money_order_draft()
+            self.money_order_id.unlink()
         self.approve_uid = ''
+        self.state = 'draft'
 
     @api.one
     def get_receipt_line(self, line, single=False):
@@ -446,9 +459,8 @@ class BuyOrder(models.Model):
         '''
 
         self.ensure_one()
-        name = (self.type == 'buy' and u'采购入库单' or u'采购退货单')
         action = {
-            'name': name,
+            'name': u'采购入库单',
             'type': 'ir.actions.act_window',
             'view_type': 'form',
             'view_mode': 'form',
@@ -458,16 +470,41 @@ class BuyOrder(models.Model):
         }
 
         #receipt_ids = sum([order.receipt_ids.ids for order in self], [])
-        receipt_ids = self.receipt_ids.ids
+        receipt_ids = [receipt.id for receipt in self.receipt_ids if not receipt.is_return]
         # choose the view_mode accordingly
         if len(receipt_ids) > 1:
             action['domain'] = "[('id','in',[" + \
                 ','.join(map(str, receipt_ids)) + "])]"
             action['view_mode'] = 'tree,form'
         elif len(receipt_ids) == 1:
-            view_id = (self.type == 'buy'
-                       and self.env.ref('buy.buy_receipt_form').id
-                       or self.env.ref('buy.buy_return_form').id)
+            view_id = self.env.ref('buy.buy_receipt_form').id
+            action['views'] = [(view_id, 'form')]
+            action['res_id'] = receipt_ids and receipt_ids[0] or False
+        return action
+
+    @api.multi
+    def action_view_return(self):
+        '''
+        该购货订单对应的退货单
+        '''
+        self.ensure_one()
+        action = {
+            'name': u'采购退货单',
+            'type': 'ir.actions.act_window',
+            'view_type': 'form',
+            'view_mode': 'form',
+            'res_model': 'buy.receipt',
+            'view_id': False,
+            'target': 'current',
+        }
+
+        receipt_ids = [receipt.id for receipt in self.receipt_ids if receipt.is_return]
+        if len(receipt_ids) > 1:
+            action['domain'] = "[('id','in',[" + \
+                               ','.join(map(str, receipt_ids)) + "])]"
+            action['view_mode'] = 'tree,form'
+        elif len(receipt_ids) == 1:
+            view_id = self.env.ref('buy.buy_return_form').id
             action['views'] = [(view_id, 'form')]
             action['res_id'] = receipt_ids and receipt_ids[0] or False
         return action
@@ -640,17 +677,7 @@ class BuyOrderLine(models.Model):
                     self.price_taxed = line.price
                     break
 
-            if self.goods_id.tax_rate and self.order_id.partner_id.tax_rate:
-                if self.goods_id.tax_rate >= self.order_id.partner_id.tax_rate:
-                    self.tax_rate = self.order_id.partner_id.tax_rate
-                else:
-                    self.tax_rate = self.goods_id.tax_rate
-            elif self.goods_id.tax_rate and not self.order_id.partner_id.tax_rate:
-                self.tax_rate = self.goods_id.tax_rate
-            elif not self.goods_id.tax_rate and self.order_id.partner_id.tax_rate:
-                self.tax_rate = self.order_id.partner_id.tax_rate
-            else:
-                self.tax_rate = self.env.user.company_id.import_tax_rate
+            self.tax_rate = self.goods_id.get_tax_rate(self.goods_id, self.order_id.partner_id, 'buy')
 
     @api.onchange('quantity', 'price_taxed', 'discount_rate')
     def onchange_discount_rate(self):
@@ -658,7 +685,6 @@ class BuyOrderLine(models.Model):
         self.price = self.price_taxed / (1 + self.tax_rate * 0.01)
         self.discount_amount = (self.quantity * self.price *
                                 self.discount_rate * 0.01)
-
 
 class Payment(models.Model):
     _name = "payment.plan"
@@ -706,5 +732,6 @@ class Payment(models.Model):
                 'reconciled': 0,
                 'to_reconcile': self.amount_money,
                 'state': 'draft',
+                'buy_id': self.buy_id.id,
             })
         self.date_application = datetime.now()

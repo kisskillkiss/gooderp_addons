@@ -11,7 +11,7 @@
             		<field name='name'/>
             		<field name='type'/>
             		<field name='user_id'/>
-            		<field name='partner_id'/>
+            		<field name='partner_id' options="{'no_open': True, 'no_create': True}"/>
             		<field name="amount" sum="合计"/>
             		<field name='delivery_date'/>
                     <field name='state'/>
@@ -43,7 +43,14 @@
 								name="action_view_delivery"
 								class="oe_stat_button"
 								icon="fa-truck" attrs="{'invisible':['|', ('state', 'in', ('draft')),('delivery_count','=',0)]}">
-								<field name="delivery_count" widget="statinfo" string="发库/退货单" help="Incoming Shipments"/>
+								<field name="delivery_count" widget="statinfo" string="发货单" help="Incoming Shipments"/>
+								<field name="delivery_ids" invisible="1"/>
+							</button>
+							<button type="object"
+								name="action_view_return"
+								class="oe_stat_button"
+								icon="fa-truck" attrs="{'invisible':['|', ('state', 'in', ('draft')),('return_count','=',0)]}">
+								<field name="return_count" widget="statinfo" string="退货单" help="Incoming Shipments"/>
 								<field name="delivery_ids" invisible="1"/>
 							</button>
 						</div>
@@ -52,12 +59,13 @@
             				<group>
             					<field name='partner_id' required='1'
             						domain="[('c_category_id', '!=', False)]"
+						        options="{'no_open': True, 'no_create': True}"
             						context="{'form_view_ref': 'core.customer_address_form'}"/>
             					<field name='contact'/>
             				    <field name='address_id'
             				        options="{'no_open': True, 'no_create': True}"/>
             				    <field name='mobile'/>
-            					<field name='user_id'
+            					<field name='user_id' readonly="1"
                                        options="{'no_open': True, 'no_create': True}"/>
             					<field name='date'/>
             					<field name='warehouse_id'/>
@@ -104,10 +112,12 @@
 										<field name="discount_amount" groups='sell.sell_discount_groups'/>
                             			<field name="amount"/>
 										<field name="received_amount"/>
+										<field name="net_weight"/>
                         			</group>
                         			<group>
 										<field name="pre_receipt"/>
                             			<field name="bank_account_id"/>
+                            			<field name="money_order_id"/>
                         			</group>
                     			</group>
                     			<group>
@@ -174,7 +184,7 @@
                     <field name="order_id" groups='sell.sell_groups'/>
             		<field name='user_id'/>
                     <field name='warehouse_id'/>
-            		<field name='partner_id'/>
+            		<field name='partner_id' options="{'no_open': True, 'no_create': True}"/>
 					<field name='total_qty'/>
             		<field name="amount" sum="总金额" groups='sell.group_sell'/>
 					<field name='currency_id'
@@ -208,6 +218,7 @@
             				<group>
             					<field name='partner_id' required='1'
             						attrs="{'readonly': [('state','!=','draft')]}"
+						        options="{'no_open': True, 'no_create': True}"
             						domain="[('c_category_id', '!=', False)]"
             						context="{'form_view_ref': 'core.customer_address_form'}"/>
             				    <field name='contact'/>
@@ -259,6 +270,10 @@
 	                    					domain="[('goods_id', '=', goods_id), ('state', '=', 'done'), ('lot', '!=', False), ('qty_remaining', '>', 0), ('warehouse_dest_id', '=', parent.warehouse_id)]"
 	                    					context="{'lot': True}" options="{'no_open': True, 'no_create': True}"
 	                    					groups='goods.batch_groups'/>
+										<field name="location_id"
+											   options="{'no_open':True,'no_create':True}"
+											   groups="warehouse.multi_location_groups"
+											   domain="[('warehouse_id','=',parent.warehouse_id),('goods_id','=',goods_id)]"/>
 		         						<field name='goods_uos_qty' sum='辅助数量合计'
 		         							groups='goods.auxiliary_unit_groups'/>
 				 						<field name='uos_id' groups='goods.auxiliary_unit_groups' />
@@ -310,6 +325,7 @@
                 			<group>
                 				<field name="receipt" attrs="{'readonly': [('state','!=','draft')]}" groups='sell.group_sell'/>
                 				<field name="bank_account_id" attrs="{'readonly': [('state','!=','draft')]}" groups='sell.group_sell'/>
+                				<field name="money_order_id" groups='sell.group_sell'/>
                 			</group>
             			</group>
 						<field name="note" placeholder="暂无备注信息" attrs="{'readonly': [('state','!=','draft')]}"/>
@@ -367,6 +383,16 @@
                 </search>
             </field>
         </record>
+		<record id="sell_delivery_calendar" model="ir.ui.view">
+            <field name="name">sell.delivery.calendar</field>
+            <field name="model">sell.delivery</field>
+            <field name="arch" type="xml">
+                <calendar color="user_id" date_start="date_due" quick_add="False" string="销售发货单">
+                    <field name="name"/>
+					<field name="partner_id"/>
+                </calendar>
+            </field>
+        </record>
 
     	<!--销售退货单tree视图-->
     	<record id='sell_return_tree' model='ir.ui.view'>
@@ -379,7 +405,7 @@
                     <field name="order_id" groups='sell.sell_groups'/>
             		<field name='user_id'/>
                     <field name='warehouse_dest_id'/>
-            		<field name='partner_id'/>
+            		<field name='partner_id' options="{'no_open': True, 'no_create': True}"/>
 					<field name='total_qty'/>
             		<field name="amount" sum="总金额" groups='sell.group_sell'/>
             		<field name='receipt' string="本次退款"/>
@@ -414,6 +440,7 @@
             				<group>
             					<field name='partner_id' required='1'
             						attrs="{'readonly': [('state','!=','draft')]}"
+						        options="{'no_open': True, 'no_create': True}"
             						domain="[('c_category_id', '!=', False)]"
             						context="{'form_view_ref': 'core.customer_address_form'}"/>
             					<field name='contact'/>
@@ -478,6 +505,7 @@
 				 						<field name='using_attribute' invisible='1'/>
 				 						<field name='using_batch' invisible='1'/>
 					                    <field name='force_batch_one' invisible='1'/>
+										<field name='sell_line_id' invisible='1'/>
 				 					</tree>
 				 				</field>
 			 				</page>
@@ -512,6 +540,7 @@
                 			<group>
                 				<field name="receipt" attrs="{'readonly': [('state','!=','draft')]}" groups='sell.group_sell'/>
                 				<field name="bank_account_id" attrs="{'readonly': [('state','!=','draft')]}" groups='sell.group_sell'/>
+                				<field name="money_order_id" groups='sell.group_sell'/>
                 				<field name="create_date" readonly="1" string="录单时间"/>
                 				<field name="write_date" readonly="1" string="最后修改时间"/>
                 			</group>
@@ -673,7 +702,7 @@
         	<field name='name'>销售发货单</field>
         	<field name='res_model'>sell.delivery</field>
         	<field name='view_type'>form</field>
-        	<field name='view_mode'>tree,form</field>
+        	<field name='view_mode'>tree,form,calendar</field>
         	<field name="context">{'is_return':False, 'warehouse_dest_type': 'customer','search_default_draft':1}</field>
         	<field name="domain">[('is_return','=',False)]</field>
         	<field name='view_id' ref='sell_delivery_tree'/>

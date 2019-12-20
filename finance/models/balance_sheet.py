@@ -20,17 +20,17 @@ class BalanceSheet(models.Model):
     line = fields.Integer(u'序号', required=True, help=u'资产负债表的行次')
     balance = fields.Char(u'资产')
     line_num = fields.Char(u'行次', help=u'此处行次并不是出报表的实际的行数,只是显示用的用来符合国人习惯')
-    ending_balance = fields.Float(u'期末余额')
+    ending_balance = fields.Float(u'期末数')
     balance_formula = fields.Text(
         u'科目范围', help=u'设定本行的资产负债表的科目范围，例如1001~1012999999 结束科目尽可能大一些方便以后扩展')
-    beginning_balance = fields.Float(u'年初余额')
+    beginning_balance = fields.Float(u'年初数')
 
     balance_two = fields.Char(u'负债和所有者权益')
     line_num_two = fields.Char(u'行次', help=u'此处行次并不是出报表的实际的行数,只是显示用的用来符合国人习惯')
-    ending_balance_two = fields.Float(u'期末余额')
+    ending_balance_two = fields.Float(u'期末数')
     balance_two_formula = fields.Text(
         u'科目范围', help=u'设定本行的资产负债表的科目范围，例如1001~1012999999 结束科目尽可能大一些方便以后扩展')
-    beginning_balance_two = fields.Float(u'年初余额', help=u'报表行本年的年余额')
+    beginning_balance_two = fields.Float(u'年初数', help=u'报表行本年的年余额')
     company_id = fields.Many2one(
         'res.company',
         string=u'公司',
@@ -82,12 +82,13 @@ class CreateBalanceSheetWizard(models.TransientModel):
             subject_vals = []
             if len(parameter_str_list) == 1:
                 subject_ids = self.env['finance.account'].search(
-                    [('code', '=', parameter_str_list[0])])
+                    [('code', '=', parameter_str_list[0]), ('account_type', '!=', 'view')])
             else:
                 subject_ids = self.env['finance.account'].search(
-                    [('code', '>=', parameter_str_list[0]), ('code', '<=', parameter_str_list[1])])
+                    [('code', '>=', parameter_str_list[0]), ('code', '<=', parameter_str_list[1]),
+                     ('account_type', '!=', 'view')])
             trial_balances = self.env['trial.balance'].search([('subject_name_id', 'in', [
-                                                              subject.id for subject in subject_ids]), ('period_id', '=', period_id.id)])
+                subject.id for subject in subject_ids]), ('period_id', '=', period_id.id)])
             for trial_balance in trial_balances:
                 # 根据参数code 对应的科目的 方向 进行不同的操作
                 #  trial_balance.subject_name_id.costs_types == 'assets'解决：累计折旧 余额记贷方
@@ -99,9 +100,6 @@ class CreateBalanceSheetWizard(models.TransientModel):
                         trial_balance[compute_field_list[1]] - trial_balance[compute_field_list[0]])
             return sum(subject_vals)
 
-        else:
-            return 0
-
     def deal_with_balance_formula(self, balance_formula, period_id, year_begain_field):
         if balance_formula:
             return_vals = sum([self.compute_balance(one_formula, period_id, year_begain_field)
@@ -112,10 +110,10 @@ class CreateBalanceSheetWizard(models.TransientModel):
 
     def balance_sheet_create(self, balance_sheet_obj, year_begain_field, current_period_field):
         balance_sheet_obj.write(
-            {'beginning_balance': fabs(self.deal_with_balance_formula(balance_sheet_obj.balance_formula,
-                                                                      self.period_id, year_begain_field)),
-             'ending_balance': fabs(self.deal_with_balance_formula(balance_sheet_obj.balance_formula,
-                                                                   self.period_id, current_period_field)),
+            {'beginning_balance': self.deal_with_balance_formula(balance_sheet_obj.balance_formula,
+                                                                      self.period_id, year_begain_field),
+             'ending_balance': self.deal_with_balance_formula(balance_sheet_obj.balance_formula,
+                                                                   self.period_id, current_period_field),
              'beginning_balance_two': self.deal_with_balance_formula(balance_sheet_obj.balance_two_formula,
                                                                      self.period_id, year_begain_field),
              'ending_balance_two': self.deal_with_balance_formula(balance_sheet_obj.balance_two_formula,
@@ -141,10 +139,12 @@ class CreateBalanceSheetWizard(models.TransientModel):
         company_row = self.env['res.company'].browse(force_company)
         days = calendar.monthrange(
             int(self.period_id.year), int(self.period_id.month))[1]
-        attachment_information = u'编制单位：' + company_row.name + u',,,,' + self.period_id.year\
+        #TODO 格子不对 
+        attachment_information = u'编制单位：' + company_row.name + u',,,,' + self.period_id.year \
                                  + u'年' + self.period_id.month + u'月' + \
-            str(days) + u'日' + u',,,' + u'单位：元'
-        return {     # 返回生成资产负债表的数据的列表
+                                 str(days) + u'日' + u',' + u'单位：元'
+        domain = [('id', 'in', [balance_sheet_obj.id for balance_sheet_obj in balance_sheet_objs])]
+        return {  # 返回生成资产负债表的数据的列表
             'type': 'ir.actions.act_window',
             'name': u'资产负债表：' + self.period_id.name,
             'view_type': 'form',
@@ -154,7 +154,7 @@ class CreateBalanceSheetWizard(models.TransientModel):
             'view_id': False,
             'views': [(view_id, 'tree')],
             'context': {'period_id': self.period_id.id, 'attachment_information': attachment_information},
-            'domain': [('id', 'in', [balance_sheet_obj.id for balance_sheet_obj in balance_sheet_objs])],
+            'domain': domain,
             'limit': 65535,
         }
 
@@ -180,18 +180,21 @@ class CreateBalanceSheetWizard(models.TransientModel):
         current_period_field = [
             'current_occurrence_debit', 'current_occurrence_credit']
         for balance_sheet_obj in balance_sheet_objs:
-            balance_sheet_obj.write({'cumulative_occurrence_balance': self.deal_with_profit_formula(balance_sheet_obj.occurrence_balance_formula, self.period_id, year_begain_field),
-                                     'current_occurrence_balance': self.compute_profit(balance_sheet_obj.occurrence_balance_formula, self.period_id, current_period_field)})
+            balance_sheet_obj.write({'cumulative_occurrence_balance': self.deal_with_profit_formula(
+                balance_sheet_obj.occurrence_balance_formula, self.period_id, year_begain_field),
+                'current_occurrence_balance': self.compute_profit(
+                    balance_sheet_obj.occurrence_balance_formula, self.period_id,
+                    current_period_field)})
         force_company = self._context.get('force_company')
         if not force_company:
             force_company = self.env.user.company_id.id
         company_row = self.env['res.company'].browse(force_company)
         days = calendar.monthrange(
             int(self.period_id.year), int(self.period_id.month))[1]
-        attachment_information = u'编制单位：' + company_row.name + u',,' + self.period_id.year\
-                                 + u'年' + self.period_id.month + u'月' + \
-            str(days) + u'日' + u',' + u'单位：元'
-        return {      # 返回生成利润表的数据的列表
+        attachment_information = u'编制单位：' + company_row.name + u',,' + self.period_id.year \
+                                 + u'年' + self.period_id.month + u'月' + u',' + u'单位：元'
+        domain = [('id', 'in', [balance_sheet_obj.id for balance_sheet_obj in balance_sheet_objs])]
+        return {  # 返回生成利润表的数据的列表
             'type': 'ir.actions.act_window',
             'name': u'利润表：' + self.period_id.name,
             'view_type': 'form',
@@ -201,7 +204,7 @@ class CreateBalanceSheetWizard(models.TransientModel):
             'view_id': False,
             'views': [(view_id, 'tree')],
             'context': {'period_id': self.period_id.id, 'attachment_information': attachment_information},
-            'domain': [('id', 'in', [balance_sheet_obj.id for balance_sheet_obj in balance_sheet_objs])],
+            'domain': domain,
             'limit': 65535,
         }
 
@@ -217,26 +220,25 @@ class CreateBalanceSheetWizard(models.TransientModel):
             sign_out = False
             if len(parameter_str_list) == 1:
                 subject_ids = self.env['finance.account'].search(
-                    [('code', '=', parameter_str_list[0])])
+                    [('code', '=', parameter_str_list[0]), ('account_type', '!=', 'view')])
             else:
                 subject_ids = self.env['finance.account'].search(
-                    [('code', '>=', parameter_str_list[0]), ('code', '<=', parameter_str_list[1])])
-            if subject_ids:   # 本行计算科目借贷方向
+                    [('code', '>=', parameter_str_list[0]), ('code', '<=', parameter_str_list[1]),
+                     ('account_type', '!=', 'view')])
+            if subject_ids:  # 本行计算科目借贷方向
                 for line in subject_ids:
                     if line.balance_directions == 'in':
                         sign_in = True
                     if line.balance_directions == 'out':
                         sign_out = True
             trial_balances = self.env['trial.balance'].search([('subject_name_id', 'in', [
-                                                              subject.id for subject in subject_ids]), ('period_id', '=', period_id.id)])
+                subject.id for subject in subject_ids]), ('period_id', '=', period_id.id)])
             for trial_balance in trial_balances:
                 if trial_balance.subject_name_id.balance_directions == 'in':
-                    subject_vals_in.append(
-                        trial_balance[compute_field_list[0]])
+                    subject_vals_in.append(trial_balance[compute_field_list[0]])
                 elif trial_balance.subject_name_id.balance_directions == 'out':
-                    subject_vals_out.append(
-                        trial_balance[compute_field_list[1]])
-                if sign_out and sign_in:    # 方向有借且有贷
+                    subject_vals_out.append(trial_balance[compute_field_list[1]])
+                if sign_out and sign_in:  # 方向有借且有贷
                     total_sum = sum(subject_vals_out) - sum(subject_vals_in)
                 else:
                     if subject_vals_in:
@@ -269,3 +271,4 @@ class ProfitStatement(models.Model):
         string=u'公司',
         change_default=True,
         default=lambda self: self.env['res.company']._company_default_get())
+

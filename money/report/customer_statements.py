@@ -17,7 +17,7 @@ class CustomerStatementsReport(models.Model):
         pre_record = self.search(
             [('id', '<=', self.id), ('partner_id', '=', self.partner_id.id)])
         for pre in pre_record:
-            self.balance_amount += pre.amount - pre.pay_amount - self.discount_money
+            self.balance_amount += pre.amount - pre.pay_amount - pre.discount_money
 
     partner_id = fields.Many2one('partner', string=u'业务伙伴', readonly=True)
     name = fields.Char(string=u'单据编号', readonly=True)
@@ -76,31 +76,5 @@ class CustomerStatementsReport(models.Model):
                 FROM money_invoice AS mi
                 LEFT JOIN core_category AS c ON mi.category_id = c.id
                 WHERE c.type = 'income' AND mi.state = 'done'
-                UNION ALL
-                SELECT ro.partner_id,
-                        ro.name,
-                        ro.date,
-                        ro.write_date AS done_date,
-                        0 AS amount,
-                        sol.this_reconcile AS pay_amount,
-                        0 AS discount_money,
-                        0 AS balance_amount,
-                        ro.note AS note
-                FROM reconcile_order AS ro
-                LEFT JOIN source_order_line AS sol ON sol.receivable_reconcile_id = ro.id
-                WHERE ro.state = 'done' AND ro.business_type in ('get_to_pay', 'get_to_get')
-                UNION ALL
-                SELECT ro.to_partner_id AS partner_id,
-                        ro.name,
-                        ro.date,
-                        ro.write_date AS done_date,
-                        sol.this_reconcile AS amount,
-                        0 AS pay_amount,
-                        0 AS discount_money,
-                        0 AS balance_amount,
-                        ro.note AS note
-                FROM reconcile_order AS ro
-                LEFT JOIN source_order_line AS sol ON sol.receivable_reconcile_id = ro.id
-                WHERE ro.state = 'done' AND ro.business_type = 'get_to_get'
                 ) AS ps)
         """)

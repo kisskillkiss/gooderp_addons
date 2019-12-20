@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from odoo import models, fields, api
+from odoo.exceptions import UserError
 
 
 class Goods(models.Model):
@@ -8,6 +9,53 @@ class Goods(models.Model):
     继承了core里面定义的goods 模块，并定义了视图和添加字段。
     """
     _inherit = 'goods'
+
+    @api.multi
+    def get_parent_tax_rate(self, parent_id):
+        # 逐级取商品分类上的税率
+        tax_rate = parent_id.tax_rate
+        if not tax_rate and parent_id.parent_id:
+            tax_rate = self.get_parent_tax_rate(parent_id.parent_id)
+
+        return tax_rate
+
+    @api.multi
+    def get_tax_rate(self, goods, partner, type):
+        """
+        获得税率
+        如果商品上没有税率，则逐级取商品分类上的税率；
+        商品税率和业务伙伴税率做比较：如果都存在，取小的；其中一个存在取该值；都不存在取公司上的进/销项税
+        """
+        if not goods:
+            return
+        goods_tax_rate, partner_tax_rate = False, False
+        # 如果商品上没有税率，则取商品分类上的税率
+        if goods.tax_rate:
+            goods_tax_rate = goods.tax_rate
+        elif goods.goods_class_id.tax_rate:
+            goods_tax_rate = goods.goods_class_id.tax_rate
+        elif goods.goods_class_id.parent_id:  # 逐级取商品分类上的税率
+            goods_tax_rate = self.get_parent_tax_rate(goods.goods_class_id.parent_id)
+
+        # 取业务伙伴税率
+        if partner:
+            partner_tax_rate = partner.tax_rate
+
+        # 商品税率和业务伙伴税率做比较，并根据情况返回
+        if goods_tax_rate and partner_tax_rate:
+            if goods_tax_rate >= partner_tax_rate:
+                return partner_tax_rate
+            else:
+                return goods_tax_rate
+        elif goods_tax_rate and not partner_tax_rate:
+            return goods_tax_rate
+        elif not goods_tax_rate and partner_tax_rate:
+            return partner_tax_rate
+        else:
+            if type == 'buy':
+                return self.env.user.company_id.import_tax_rate
+            elif type == 'sell':
+                return self.env.user.company_id.output_tax_rate
 
     no_stock = fields.Boolean(u'虚拟商品')
     using_batch = fields.Boolean(u'管理批号')
@@ -69,7 +117,7 @@ class Attribute(models.Model):
     @api.depends('value_ids')
     def _compute_name(self):
         self.name = ' '.join(
-            [value.category_id.name + ':' + value.value_id.name for value in self.value_ids])
+            [value.value_id.name for value in self.value_ids])
 
     @api.model
     def name_search(self, name='', args=None, operator='ilike', limit=100):
@@ -96,7 +144,18 @@ class Attribute(models.Model):
 
     _sql_constraints = [
         ('ean_uniq', 'unique (ean)', u'该条码已存在'),
+        ('goods_attribute_uniq', 'unique (goods_id, name)', u'该SKU已存在'),
     ]
+
+    @api.one
+    @api.constrains('value_ids')
+    def check_value_ids(self):
+        att_dict = {}
+        for line in self.value_ids:
+            if not att_dict.has_key(line.category_id):
+                att_dict[line.category_id] = line.category_id
+            else:
+                raise UserError(u'属性值的类别不能相同')
 
 
 class AttributeValue(models.Model):
@@ -140,5 +199,5 @@ class AttributeValueValue(models.Model):
         default=lambda self: self.env['res.company']._company_default_get())
 
     _sql_constraints = [
-        ('name_category_uniq', 'unique(category_id,name)', '同一属性的值不能重复')
+        ('name_category_uniq', 'unique(category_id,name)', u'同一属性的值不能重复')
     ]

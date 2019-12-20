@@ -45,6 +45,9 @@ class TestMoneyOrder(TransactionCase):
         self.assertEqual(
             self.env.ref('core.lenovo').payable,
             lenovo_payable - 2000 + 2000)
+        # 不可重复撤销
+        with self.assertRaises(UserError):
+            self.env.ref('money.pay_2000').money_order_draft()
 
     def test_money_order_draft_voucher_done(self):
         ''' 测试收付款反审核 ：审核后的凭证先反审核再删除 '''
@@ -65,6 +68,26 @@ class TestMoneyOrder(TransactionCase):
         self.env.ref('money.get_40000').money_order_done()  # 先做收款以便付款足够支付
         self.env.ref('money.pay_2000').money_order_done()
         self.env.ref('money.pay_2000').money_order_draft()
+
+    def test_money_order_draft_has_reconcile_order(self):
+        ''' Test: 反审核时，核销金额不为0，不能反审核 '''
+        self.env.ref('money.get_40000').money_order_done()
+        adv_pay_to_get = self.env.ref('money.reconcile_adv_pay_to_get')
+        adv_pay_to_get.partner_id = self.env.ref('core.jd')
+
+        self.env['money.invoice'].create({
+            'partner_id': self.env.ref('core.jd').id, 'date': "2016-02-20",
+            'name': 'invoice/2016001',
+            'category_id': self.env.ref('money.core_category_sale').id,
+            'amount': 40000.0,
+            'reconciled': 0,
+            'to_reconcile': 40000.0,
+            'date_due': '2016-09-07'})
+
+        adv_pay_to_get.onchange_partner_id()
+        adv_pay_to_get.reconcile_order_done()
+        with self.assertRaises(UserError):
+            self.env.ref('money.get_40000').money_order_draft()
 
     def test_money_order_onchange(self):
         '''测试收付款onchange'''
@@ -154,6 +177,13 @@ class TestMoneyOrder(TransactionCase):
         self.env.ref('core.supplier_category_1').account_id = False
         with self.assertRaises(UserError):
             self.env.ref('money.pay_2000').money_order_done()
+
+    def test_money_order_done_no_partner_account(self):
+        ''' 测试收款审核选定的客户没有指定科目  '''
+        # 收款
+        self.env.ref('core.customer_category_1').account_id = False
+        with self.assertRaises(UserError):
+            self.env.ref('money.get_40000').money_order_done()
 
     def test_get_category_id(self):
         ''' 测试  _get_category_id 不存在 context.get('type')'''
@@ -259,6 +289,8 @@ class TestMoneyOrder(TransactionCase):
         # 重置 结算单行 上的本次核销金额：已审核的单据不能执行这个操作
         with self.assertRaises(ValueError):
             money2.write_off_reset()
+        money2.this_reconcile = 210
+
         # 重置 结算单行 上的本次核销金额
         money2.money_order_draft()
         money2.write_off_reset()
@@ -322,7 +354,7 @@ class TestMoneyOrder(TransactionCase):
         with self.assertRaises(UserError):
             pay_money.money_order_done()
 
-        self.env.ref('money.get_40000').money_order_done()
+        # self.env.ref('money.get_40000').money_order_done()
         pay_money.line_ids[0].bank_id = self.env.ref('core.comm').id
         pay_money_source = pay_money.source_ids and pay_money.source_ids[0] or False
         if pay_money_source:
@@ -600,6 +632,10 @@ class TestMoneyTransferOrder(TransactionCase):
         self.env.ref('money.transfer_300').money_transfer_draft()
         # 转入账户余额不足，不能反审核
         self.env.ref('money.transfer_line_2').currency_amount = 200
+        self.env.ref('money.transfer_400').money_transfer_done()
+        self.env.ref('finance.account_bank').currency_id = False
+        self.env.ref('core.alipay').balance = \
+            self.env.ref('core.alipay').balance - 600
         with self.assertRaises(UserError):
             self.env.ref('money.transfer_400').money_transfer_draft()
 
@@ -691,6 +727,11 @@ class TestMoneyTransferOrder(TransactionCase):
         with self.assertRaises(UserError):
             self.env.ref('money.transfer_300').money_transfer_done()
 
+    def test_compute_transfer_amount(self):
+        '''计算转账总金额'''
+        transfer = self.env.ref('money.transfer_300')
+        self.assertEqual(transfer.transfer_amount, 300)
+
 
 class TestPartner(TransactionCase):
 
@@ -717,8 +758,23 @@ class TestPartner(TransactionCase):
     def test_bank_set_init(self):
         '''测试资金期初'''
         bank = self.env.ref('core.comm')
+        # 资金没有设置期初，else判断
+        bank._set_init_balance()
+        self.assertEqual(bank.balance, 0)
+
         balance = bank.balance
         bank.init_balance = 1111
         self.assertEqual(bank.balance, bank.init_balance + balance)
         # 测试   资金如果有前期初值，删掉已前的单据   的 if 判断
         bank._set_init_balance()
+
+        # 期初由1111改为0，删掉其他收入单
+        bank.init_balance = 0
+        self.assertEqual(bank.balance, 0)
+
+        # 初始化期间已结账，设置账户期初时报错
+        start_date = self.env.user.company_id.start_date
+        start_date_period_id = self.env['finance.period'].search_period(start_date)
+        start_date_period_id.is_closed = True
+        with self.assertRaises(UserError):
+            bank.init_balance = 11

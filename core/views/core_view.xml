@@ -68,6 +68,7 @@
 				<tree editable="TOP" string="可选值">
 					<field name="name"/>
 					<field name="type"/>
+					<field name="note" groups="base.group_no_one"/>
 					<field name='active'  invisible='1'/>
 				</tree>
 			</field>
@@ -221,6 +222,7 @@
 								<field name="main_mobile"/>
 								<field name="main_contact"/>
 								<field name="credit_limit"/>
+								<field name="credit_time"/>
 								<field name="tag_ids" widget="many2many_tags"/>
 								<field name="responsible_id"/>
 								<field name="share_id"/>
@@ -233,6 +235,8 @@
 								<field name="main_address"/>
 								<field name="tax_num"/>
 								<field name="receivable"/>
+								<field name="date_qualify"/>
+								<field name="days_qualify"/>
 							</group>
 							<field name="note" placeholder="暂无备注信息"/>
 							<field name="s_category_id" placeholder="转为供应商"/>
@@ -324,6 +328,8 @@
 								<field name="main_address"/>
 								<field name="tax_num"/>
 								<field name="payable"/>
+								<field name="date_qualify"/>
+								<field name="days_qualify"/>
 							</group>
 							<field name="note" placeholder="暂无备注信息"/>
 						    <field name="c_category_id" placeholder="转为客户"/>
@@ -551,6 +557,10 @@
 		</record>
 		<menuitem id='menu_clean_business_data' name='清理业务数据表' action='action_clean_business_data' parent='base.menu_custom' sequence='70'/>
 
+		<record id="action_open_module_extra_better" model="ir.actions.client">
+			<field name="name">项目首页</field>
+			<field name="tag">better.list</field>
+		</record>
 
         <!-- 用权限组来隐藏系统自带的根菜单 -->
 		<record model="ir.ui.menu" id="base.menu_administration">
@@ -565,6 +575,8 @@
 		<menuitem  groups="-base.group_no_one,core.nobody_can_see" id="web_settings_dashboard.web_dashboard_menu" parent="base.menu_administration"  />
 		<menuitem parent="system_menu" id="menu_decimal_precision_form_copy" name="小数精度设置"
 				  action="decimal_precision.action_decimal_precision_form"/>
+		<!--<menuitem id="menu_module_extra_better" parent="base.menu_management" name="项目首页" sequence="6" action="action_open_module_extra_better" />-->
+
 
 	</data>
 </openerp>

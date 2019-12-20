@@ -41,7 +41,6 @@ class TestCustomerStatements(TransactionCase):
         receipt.sell_delivery_done()
         invoice = self.env['money.invoice'].search(
             [('name', '=', receipt.name)])
-        invoice.money_invoice_done()
 
         # 创建销售退货单记录
         sell_return = self.env.ref('sell.sell_order_return')
@@ -49,9 +48,6 @@ class TestCustomerStatements(TransactionCase):
         receipt_return = self.env['sell.delivery'].search(
             [('order_id', '=', sell_return.id)])
         receipt_return.sell_delivery_done()
-        invoice_return = self.env['money.invoice'].search(
-            [('name', '=', receipt_return.name)])
-        invoice_return.money_invoice_done()
 
     def test_customer_statements_wizard(self):
         '''客户对账单向导'''
@@ -428,11 +424,6 @@ class TestReceiptWizard(TransactionCase):
         self.env.ref('money.get_40000').money_order_done()
         self.delivery.receipt = 2.0
         self.delivery.sell_delivery_done()
-        # 查找产生的收款单，并审核
-        source_line = self.env['source.order.line'].search(
-            [('name', '=', self.delivery.invoice_id.id)])
-        for line in source_line:
-            line.money_id.money_order_done()
 
         # 销货订单产生发货单，并审核发货单，成交金额和本次收款均为0
         new_delivery = self.delivery.copy()
@@ -490,6 +481,14 @@ class TestReceiptWizard(TransactionCase):
         for line in receipt_line2:
             line.view_detail()
 
+    def test_generate_reconcile_order(self):
+        '''新建核销单，应收冲预收，客户为所选行客户'''
+        self.receipt_wizard.button_ok()
+        for line in self.env['sell.receipt'].search([
+            ('order_name', '=', u'未核销预收款'), ('receipt', '!=', 0)]):
+            line.generate_reconcile_order()
+            # 查看生成的核销单
+            line.generate_reconcile_order()
 
 class TestSellTopTenWizard(TransactionCase):
     '''测试销量前十商品向导'''

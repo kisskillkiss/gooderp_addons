@@ -76,6 +76,9 @@ class SellAdjust(models.Model):
         if not delivery:
             raise UserError(u'销售发货单已全部出库，不能调整')
         for line in self.line_ids:
+            # 检查属性是否填充，防止无权限人员不填就可以保存
+            if line.using_attribute and not line.attribute_id:
+                raise UserError(u'请输入商品：%s 的属性' % line.goods_id.name)
             origin_line = self.env['sell.order.line'].search(
                 [('goods_id', '=', line.goods_id.id),
                  ('attribute_id', '=', line.attribute_id.id),
@@ -237,17 +240,7 @@ class SellAdjustLine(models.Model):
             self.uom_id = self.goods_id.uom_id
             self.price_taxed = self.goods_id.price
 
-            if self.goods_id.tax_rate and self.order_id.order_id.partner_id.tax_rate:
-                if self.goods_id.tax_rate >= self.order_id.order_id.partner_id.tax_rate:
-                    self.tax_rate = self.order_id.order_id.partner_id.tax_rate
-                else:
-                    self.tax_rate = self.goods_id.tax_rate
-            elif self.goods_id.tax_rate and not self.order_id.order_id.partner_id.tax_rate:
-                self.tax_rate = self.goods_id.tax_rate
-            elif not self.goods_id.tax_rate and self.order_id.order_id.partner_id.tax_rate:
-                self.tax_rate = self.order_id.order_id.partner_id.tax_rate
-            else:
-                self.tax_rate = self.env.user.company_id.output_tax_rate
+            self.tax_rate = self.goods_id.get_tax_rate(self.goods_id, self.order_id.order_id.partner_id, 'sell')
 
     @api.onchange('quantity', 'price_taxed', 'discount_rate')
     def onchange_discount_rate(self):

@@ -64,7 +64,7 @@ class TestScm(TransactionCase):
         self.wh_move_in_1.approve_order()
 
         # 请输入补货申请行商品的供应商 存在
-        self.goods_keyboard_mouse.min_stock_qty = 100
+        self.goods_keyboard_mouse.min_stock_qty = 1
         self.env.ref(
             'goods.iphone_black').goods_id = self.goods_keyboard_mouse.id
 
@@ -142,7 +142,7 @@ class TestScm(TransactionCase):
             'goods_qty': 1,
             'type': 'child'
         })
-        self.goods_computer.min_stock_qty = 5
+        self.goods_computer.min_stock_qty = 1
         self.stock_request.stock_query()
 
         # 保证不存在多条未审核购货订单行
@@ -151,3 +151,15 @@ class TestScm(TransactionCase):
             'core.zt').id
 
         self.stock_request.stock_request_done()
+
+    def test_stock_request_done_twice(self):
+        '''不能重复审核'''
+        self.wh_move_in_1.approve_order()
+        self.stock_request.stock_query()
+        # 保证不存在多条未审核购货订单行
+        self.env.ref('buy.buy_order_line_1_same').attribute_id = False
+        self.env.ref('buy.buy_return_order_line_1').order_id.partner_id = self.env.ref(
+            'core.zt').id
+        self.stock_request.stock_request_done()
+        with self.assertRaises(UserError):
+            self.stock_request.stock_request_done()

@@ -105,8 +105,8 @@ class CheckoutWizard(models.TransientModel):
                                 }
                                 voucher_line.append(res)
                         # 利润结余
-                        year_profit_account = self.company_id.profit_account
-                        remain_account = self.company_id.remain_account
+                        year_profit_account = self.env.user.company_id.profit_account
+                        remain_account = self.env.user.company_id.remain_account
                         if not year_profit_account:
                             raise UserError(u'公司本年利润科目未配置')
                         if not remain_account:
@@ -135,8 +135,8 @@ class CheckoutWizard(models.TransientModel):
                                 'line_ids': [
                                     (0, 0, line) for line in voucher_line],
                             }
-                            voucher = voucher_obj.create(valus)
-                            voucher.voucher_done()
+                            voucher_profit = voucher_obj.create(valus)
+                            voucher_profit.voucher_done()
                     year_account = None
                     if balance.period_id.month == '12':
                         year_profit_ids = voucher_line_obj.search([
@@ -210,7 +210,7 @@ class CheckoutWizard(models.TransientModel):
                             'views': [(view.id, 'form')],
                             'res_model': 'voucher',
                             'type': 'ir.actions.act_window',
-                            'res_id': voucher.id,
+                            'res_id': voucher_profit.id,
                         }
 
     # 反结账
@@ -307,6 +307,8 @@ class CheckoutWizard(models.TransientModel):
                         {'name': next_voucher_name})
             # 按月重置
             else:
+                if last_period and not last_period.is_closed:
+                    raise UserError(u'上一个期间%s未结账' % last_period.name)
                 last_voucher_number = reset_init_number
                 voucher_ids = voucher_obj.search(
                     [('period_id', '=', period_id.id), ('state', '=', 'done')], order='create_date')

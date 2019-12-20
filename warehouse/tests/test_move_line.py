@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo.tests.common import TransactionCase
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 
 
 class TestMoveLine(TransactionCase):
@@ -124,7 +124,7 @@ class TestMoveLine(TransactionCase):
         out_iphone.action_done()
         self.assertEqual(out_iphone.cost_unit, white_iphone.cost_unit)
 
-        out_iphone.action_cancel()
+        out_iphone.action_draft()
         out_iphone.attribute_id = black_iphone.attribute_id
 
         real_domain = [
@@ -196,11 +196,12 @@ class TestMoveLine(TransactionCase):
             self.keyboard_mouse_out_line.warehouse_id, self.keyboard_mouse_out_line.goods_qty)
         self.assertEqual(self.keyboard_mouse_out_line.cost_unit, cost_unit)
 
+        self.keyboard_mouse_out_line.goods_id = self.goods_cable
         self.keyboard_mouse_out_line.goods_uos_qty = 10
         temp_goods_qty = self.keyboard_mouse_out_line.goods_id.conversion_unit(
             10)
-        # self.keyboard_mouse_out_line.onchange_goods_uos_qty()
-        #self.assertEqual(self.keyboard_mouse_out_line.goods_qty, temp_goods_qty)
+        self.keyboard_mouse_out_line.onchange_goods_uos_qty()
+        self.assertEqual(self.keyboard_mouse_out_line.goods_qty, temp_goods_qty)
 
         self.mouse_in_line.action_done()
         self.mouse_out_line.lot_qty = 0
@@ -248,9 +249,54 @@ class TestMoveLine(TransactionCase):
                         move_line.warehouse_dest_id.name + u' 余 ' + str(move_line.goods_qty))]
         self.assertEqual(result, real_result)
 
+    def test_name_search_args(self):
+        '''批号下拉时候以domain搜索'''
+        result = self.env['wh.move.line'].name_search(args=[('lot', '=', 'ms160301')])
+        real_result = [(self.mouse_in_line.id, self.mouse_in_line.lot + ' ' +
+                        self.mouse_in_line.warehouse_dest_id.name + u' 余 ' + str(self.mouse_in_line.goods_qty))]
+        self.assertEqual(result, real_result)
+
     def test_compute_all_amount_wrong_tax_rate(self):
         '''明细行上输入错误税率，应报错'''
         with self.assertRaises(UserError):
             self.mouse_in_line.tax_rate = -1
         with self.assertRaises(UserError):
             self.mouse_in_line.tax_rate = 102
+
+    def test_compute_cost(self):
+        '''计算成本if语句'''
+        self.mouse_in_line.with_context({'type': 'in'}).price = 100
+        self.assertEqual(self.mouse_in_line.cost, 100)
+
+    def test_onchange_discount_amount(self):
+        '''当优惠金额发生变化时'''
+        self.assertEqual(self.mouse_in_line.cost, 40)
+        self.assertEqual(self.mouse_in_line.cost_unit, 40)
+        self.mouse_in_line.with_context({'type': 'in'}).discount_amount = 5
+        self.mouse_in_line.onchange_discount_amount()
+        self.assertEqual(self.mouse_in_line.cost, 35)
+        self.assertEqual(self.mouse_in_line.cost_unit, 40)  # fixme:单位成本并没发生变化
+
+    def test_check_goods_qty(self):
+        '''序列号管理的商品数量必须为1'''
+        # 鼠标进行了序列号管理
+        with self.assertRaises(ValidationError):
+            self.mouse_in_line.goods_qty = 2
+
+    def test_action_done_no_lot_raise_error(self):
+        '''检查属性或批号是否填充'''
+        # type=in,lot为空
+        self.mouse_in_line.lot = False
+        with self.assertRaises(UserError):
+            self.mouse_in_line.action_done()
+
+        # type=out,lot_id为空
+        self.mouse_out_line.lot_id = False
+        with self.assertRaises(UserError):
+            self.mouse_out_line.action_done()
+
+        # 属性为空
+        keyboard_line = self.env.ref('warehouse.wh_move_line_13')
+        keyboard_line.attribute_id = False
+        with self.assertRaises(UserError):
+            keyboard_line.action_done()

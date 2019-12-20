@@ -54,6 +54,224 @@ class TestReport(TransactionCase):
             last_period.is_closed = True
         report_default_period.create_trial_balance()
 
+    def test_button_change_number(self):
+        ''' 测试 调整累计数 弹窗'''
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，找到叶科目 银行存款-基本户，弹出 调整累计数向导 窗口
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                trial.button_change_number()
+                break
+
+    def test_change_cumulative_occurrence_wizard_default_get(self):
+        ''' 测试 调整累计数 向导 default_get '''
+        wizard_obj = self.env['change.cumulative.occurrence.wizard']
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，找到叶科目 银行存款-基本户，调整累计数
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                ctx = self.env.context.copy()
+                ctx['active_id'] = trial.id
+                ctx['active_ids'] = [trial.id]
+                env2 = self.env(self.env.cr, self.env.uid, ctx)
+                wizard_obj.with_env(env2).default_get([
+                    'cumulative_occurrence_debit', 'cumulative_occurrence_credit',
+                    'old_cumulative_occurrence_debit', 'old_cumulative_occurrence_credit',
+                    'trial_balance_id', 'account_id'])
+
+                # 只能调整末级科目相关的行 报错
+                with self.assertRaises(UserError):
+                    trial.subject_name_id.account_type = 'view'
+                    env2 = self.env(self.env.cr, self.env.uid, ctx)
+                    wizard_obj.with_env(env2).default_get([
+                        'cumulative_occurrence_debit', 'cumulative_occurrence_credit',
+                        'old_cumulative_occurrence_debit', 'old_cumulative_occurrence_credit',
+                        'trial_balance_id', 'account_id'])
+
+                # 一次只能调整一行 报错
+                with self.assertRaises(UserError):
+                    trial.subject_name_id.account_type = 'normal'
+                    ctx['active_ids'] = [trial.id, trial.id]
+                    env2 = self.env(self.env.cr, self.env.uid, ctx)
+                    wizard_obj.with_env(env2).default_get([
+                        'cumulative_occurrence_debit', 'cumulative_occurrence_credit',
+                        'old_cumulative_occurrence_debit', 'old_cumulative_occurrence_credit',
+                        'trial_balance_id', 'account_id'])
+
+    def test_update_cumulative_occurrence(self):
+        ''' 测试：update_cumulative_occurrence '''
+        wizard_obj = self.env['change.cumulative.occurrence.wizard']
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，找到叶科目 银行存款-基本户，调整累计数
+        for trial in self.env['trial.balance'].search([]):
+            ctx = self.env.context.copy()
+            fields_list = ['cumulative_occurrence_debit', 'cumulative_occurrence_credit',
+                           'old_cumulative_occurrence_debit', 'old_cumulative_occurrence_credit',
+                           'trial_balance_id', 'account_id']
+            # costs_types not in ('in', 'out')
+            if trial.subject_name_id == self.env.ref('finance.account_bank'):
+                ctx['active_id'] = trial.id
+                ctx['active_ids'] = [trial.id]
+                env2 = self.env(self.env.cr, self.env.uid, ctx)
+                values = wizard_obj.with_env(env2).default_get(fields_list)
+                wizard = wizard_obj.with_env(env2).create(values)
+                wizard.update_cumulative_occurrence()
+            if trial.subject_name_id == self.env.ref('finance.account_income'):  # costs_types in ('in', 'out')
+                ctx['active_id'] = trial.id
+                ctx['active_ids'] = [trial.id]
+                env2 = self.env(self.env.cr, self.env.uid, ctx)
+                values = wizard_obj.with_env(env2).default_get(fields_list)
+                wizard = wizard_obj.with_env(env2).create(values)
+                wizard.update_cumulative_occurrence()
+
+    def test_check_trial_balance_wizard_default_get(self):
+        ''' 测试 试算平衡 向导 default_get '''
+        wizard_obj = self.env['check.trial.balance.wizard']
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 创建科目余额表
+        report.create_trial_balance()
+        field_list = [
+            "total_year_init_debit", "total_year_init_credit",
+            "total_initial_balance_debit", "total_initial_balance_credit",
+            "total_current_occurrence_debit", "total_current_occurrence_credit",
+            "total_ending_balance_debit", "total_ending_balance_credit",
+            "total_cumulative_occurrence_debit", "total_cumulative_occurrence_credit"
+        ]
+        # 期间 period_201512，找到叶科目 银行存款-基本户，试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                ctx = self.env.context.copy()
+                ctx['active_id'] = trial.id
+                ctx['active_ids'] = [trial.id]
+                env2 = self.env(self.env.cr, self.env.uid, ctx)
+                wizard_obj.with_env(env2).default_get(field_list)
+
+        # init period
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，找到叶科目 银行存款-基本户，试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                ctx = self.env.context.copy()
+                ctx['active_id'] = trial.id
+                ctx['active_ids'] = [trial.id]
+                self.env.ref('base.main_company').start_date = '2015-12-12'
+                env2 = self.env(self.env.cr, self.env.uid, ctx)
+                wizard_obj.with_env(env2).default_get(field_list)
+
+    def test_check_trial_balance_wizard_default_get_diff_exists(self):
+        ''' 测试 试算平衡 向导 default_get diff exists '''
+        wizard_obj = self.env['check.trial.balance.wizard']
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 修改当期 一个凭证行的贷方金额，使贷方金额不等于借方金额
+        self.env.ref('finance.voucher_12_2_credit').credit = 4999
+        # 修改上期 一个凭证行的贷方金额，使贷方金额不等于借方金额
+        self.env.ref('finance.voucher_12').voucher_id = '201511'
+        self.env.ref('finance.voucher_line_12_credit').credit = 1000002
+        # 创建科目余额表
+        report.create_trial_balance()
+        field_list = [
+            "total_year_init_debit", "total_year_init_credit",
+            "total_initial_balance_debit", "total_initial_balance_credit",
+            "total_current_occurrence_debit", "total_current_occurrence_credit",
+            "total_ending_balance_debit", "total_ending_balance_credit",
+            "total_cumulative_occurrence_debit", "total_cumulative_occurrence_credit"
+        ]
+        # 期间 period_201512，找到叶科目 银行存款-基本户，试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                ctx = self.env.context.copy()
+                ctx['active_id'] = trial.id
+                ctx['active_ids'] = [trial.id]
+                env2 = self.env(self.env.cr, self.env.uid, ctx)
+                wizard_obj.with_env(env2).default_get(field_list)
+
+        # init period
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，找到叶科目 银行存款-基本户，试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                ctx = self.env.context.copy()
+                ctx['active_id'] = trial.id
+                ctx['active_ids'] = [trial.id]
+                self.env.ref('base.main_company').start_date = '2015-12-12'
+                env2 = self.env(self.env.cr, self.env.uid, ctx)
+                wizard_obj.with_env(env2).default_get(field_list)
+
+    def test_check_trial_balance(self):
+        ''' 测试 试算平衡 check_trial_balance '''
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，找到叶科目 银行存款-基本户，试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                if trial.period_id == self.period_201512:
+                    trial.check_trial_balance(self.period_201512)
+
+    def test_check_trial_balance_init_period(self):
+        ''' 测试 试算平衡 check_trial_balance init period '''
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，找到叶科目 银行存款-基本户，试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                self.env.ref('base.main_company').start_date = '2015-12-12'
+                if trial.period_id == trial.period_id.get_init_period():
+                    trial.check_trial_balance(trial.period_id.get_init_period())
+
+    def test_check_trial_balance_diff_exists(self):
+        ''' 测试 试算平衡 check_trial_balance diff exists '''
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 修改当期 一个凭证行的贷方金额，使贷方金额不等于借方金额
+        self.env.ref('finance.voucher_12_2_credit').credit = 4999
+        # 修改上期 一个凭证行的贷方金额，使贷方金额不等于借方金额
+        self.env.ref('finance.voucher_12').voucher_id = '201511'
+        self.env.ref('finance.voucher_line_12_credit').credit = 1000002
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，init_period 试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                if trial.period_id == self.period_201512:
+                    with self.assertRaises(UserError):
+                        trial.check_trial_balance(self.period_201512)
+
+    def test_check_trial_balance_diff_exists_init_period(self):
+        ''' 测试 试算平衡 check_trial_balance diff exists init period '''
+        report = self.env['create.trial.balance.wizard'].create(
+            {'period_id': self.period_201512.id})
+        # 修改当期 一个凭证行的贷方金额，使贷方金额不等于借方金额
+        self.env.ref('finance.voucher_12_2_credit').credit = 4999
+        # 修改上期 一个凭证行的贷方金额，使贷方金额不等于借方金额
+        self.env.ref('finance.voucher_12').voucher_id = '201511'
+        self.env.ref('finance.voucher_line_12_credit').credit = 1000002
+        # 创建科目余额表
+        report.create_trial_balance()
+        # 期间 period_201512，init_period 试算平衡
+        for trial in self.env['trial.balance'].search([]):
+            if trial.subject_name_id.id == self.env.ref('finance.account_bank').id:
+                self.env.ref('base.main_company').start_date = '2015-12-12'
+                if trial.period_id == trial.period_id.get_init_period():
+                    with self.assertRaises(UserError):
+                        trial.check_trial_balance(trial.period_id.get_init_period())
+
     def test_vouchers_summary(self):
         ''' 测试总账和明细账'''
         report = self.env['create.vouchers.summary.wizard'].create(
@@ -329,6 +547,21 @@ class TestCheckoutWizard(TransactionCase):
         self.checkout_voucher.voucher_done()
         wizard.button_checkout()
 
+    def test_recreate_voucher_name(self):
+        ''' Test: recreate_voucher_name 按年重排 '''
+        wizard = self.env['checkout.wizard'].create(
+            {'date': '2015-12-31'})
+        settings = self.env['finance.config.settings'].create({'default_reset_period': 'year',
+                                                               'default_auto_reset': True,
+                                                               'default_reset_init_number': 2})
+        settings.execute()
+        self.env['ir.values'].set_default('finance.config.settings', 'default_reset_period', 'year')
+        settings.default_reset_period = 'year'
+        settings.default_auto_reset = True
+        wizard.period_id = self.env.ref('finance.period_201512')
+        self.voucher_15_12.voucher_done()
+        self.checkout_voucher.voucher_done()
+        wizard.button_checkout()
 
 class TestActionReportPickingWrapped(TransactionCase):
     def test_action_report(self):

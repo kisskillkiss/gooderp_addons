@@ -73,6 +73,9 @@ class TestGoods(TransactionCase):
         result = self.env['goods'].name_search('001')
         self.assertEqual(result, real_result)
 
+        # goods name_search code ilike name
+        self.env['goods'].name_search('00%')
+
     def test_create(self):
         '''导入商品时，如果辅助单位为空，则用计量单位来填充它'''
         goods = self.env['goods'].create({
@@ -89,6 +92,37 @@ class TestGoods(TransactionCase):
         mouse = self.goods_mouse.copy()
         self.assertEqual(u'鼠标 (copy)', mouse.name)
 
+    def test_get_tax_rate(self):
+        ''' Test: get tax rate '''
+        fruits_vegetables = self.env.ref('goods.fruits_vegetables')
+        partner_services = self.env.ref('goods.partner_services')
+        fruits_vegetables.parent_id = partner_services.id
+
+        # 取产品上的税率
+        fruits_vegetables.tax_rate = 10.0
+        self.goods_mouse.goods_class_id = fruits_vegetables.id
+        mouse_tax_rate = self.goods_mouse.get_tax_rate(self.goods_mouse, False, 'buy')
+        self.assertEqual(mouse_tax_rate, 10.0)
+
+        # 取末级 产品分类 上的税率
+        fruits_vegetables.tax_rate = False
+        partner_services.tax_rate = 11.0
+        mouse_tax_rate = self.goods_mouse.get_tax_rate(self.goods_mouse, False, 'buy')
+        self.assertEqual(mouse_tax_rate, 11.0)
+
+        # 逐级取 产品分类 上的 税率
+        partner_services.tax_rate = False
+        goods_class_first = self.env['goods.class'].create({
+            'name': '顶级分类',
+            'tax_rate': 12.0
+        })
+        partner_services.parent_id = goods_class_first.id
+        mouse_tax_rate = self.goods_mouse.get_tax_rate(self.goods_mouse, False, 'buy')
+        self.assertEqual(mouse_tax_rate, 12.0)
+
+        # no goods
+        self.goods_mouse.get_tax_rate(False, False, 'buy')
+
 
 class TestAttributes(TransactionCase):
 
@@ -97,5 +131,23 @@ class TestAttributes(TransactionCase):
         iphone_value_white = self.env.ref('goods.iphone_value_white')
         result = self.env['attribute'].name_search('12345678987')
         real_result = [(iphone_value_white.id,
-                        iphone_value_white.category_id.name + ':' + iphone_value_white.value_id.name)]
+                        iphone_value_white.value_id.name)]
         self.assertEqual(result, real_result)
+
+        # return super
+        self.env['attribute'].name_search('123')
+
+    def test_check_value_ids(self):
+        '''属性值的类别不能相同'''
+        # if 语句
+        iphone_white = self.env.ref('goods.iphone_white')
+        iphone_white.check_value_ids()
+
+        # else 语句
+        new_att = self.env['attribute.value'].create({
+            'attribute_id': self.env.ref('goods.iphone_white').id,
+            'category_id': self.env.ref('goods.attribute_color').id,
+            'value_id': self.env.ref('goods.white').id, })
+
+        with self.assertRaises(ValidationError):
+            self.env.ref('goods.iphone').attribute_ids.write({'value_ids': [(4, 0, new_att.id)]})

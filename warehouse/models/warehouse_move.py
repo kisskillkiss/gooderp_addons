@@ -121,6 +121,14 @@ class WhMove(models.Model):
         context={'type': 'finance'},
         help=u'生成凭证时从此字段上取商品科目的对方科目',
     )
+    all_line_done = fields.Boolean(u'出库行都完成', compute='compute_all_line_done', store=True)
+
+    @api.one
+    @api.depends('line_out_ids.state')
+    def compute_all_line_done(self):
+        """如果所有出库行的状态都为done,则置为True,以便控制发料和出库按钮显隐"""
+        if all(line.state == 'done' for line in self.line_out_ids):
+            self.all_line_done = True
 
     def scan_barcode_move_line_operation(self, line, conversion):
         """
@@ -331,17 +339,15 @@ class WhMove(models.Model):
             order.line_out_ids.action_done()
             order.line_in_ids.action_done()
 
-        # 每次出库完成，清空本次出库前 库位上商品数量为0的商品和属性
+        # 每次移库完成，清空库位上商品数量为0的商品和属性（不合逻辑的数据）
         for loc in self.env['location'].search([('save_qty', '=', 0),
-                                                '|', ('goods_id', '!=', False),
-                                                ('attribute_id', '!=', False)
+                                                ('goods_id', '!=', False)
                                                 ]):
-            loc.goods_id = False
-            loc.attribute_id = False
+            if not loc.current_qty:
+                continue    # pragma: no cover
         return self.write({
             'approve_uid': self.env.uid,
             'approve_date': fields.Datetime.now(self),
-            'state': 'done',
         })
 
     def prev_cancel_approved_order(self):
@@ -355,14 +361,25 @@ class WhMove(models.Model):
         """
         for order in self:
             order.prev_cancel_approved_order()
-            order.line_out_ids.action_cancel()
-            order.line_in_ids.action_cancel()
+            order.line_out_ids.action_draft()
+            order.line_in_ids.action_draft()
 
         return self.write({
             'approve_uid': False,
             'approve_date': False,
-            'state': 'draft',
         })
+
+    @api.multi
+    def write(self, vals):
+        """
+        作废明细行
+        """
+        if vals.get('state', False) == 'cancel':
+            for order in self:
+                order.line_out_ids.action_cancel()
+                order.line_in_ids.action_cancel()
+
+        return super(WhMove, self).write(vals)
 
     @api.multi
     def create_zero_wh_in(self, wh_in, model_name):

@@ -304,6 +304,8 @@ class WhAssembly(models.Model):
     def approve_feeding(self):
         ''' 发料 '''
         for order in self:
+            if order.state == 'feeding':
+                raise UserError(u'请不要重复发料')
             order.check_parent_length()
             order.check_is_child_enable()
 
@@ -319,6 +321,8 @@ class WhAssembly(models.Model):
     def approve_order(self):
         ''' 成品入库 '''
         for order in self:
+            if order.state == 'done':
+                raise UserError(u'请不要重复执行成品入库')
             if order.state != 'feeding':
                 raise UserError(u'请先投料')
             order.move_id.check_qc_result()  # 检验质检报告是否上传
@@ -343,12 +347,14 @@ class WhAssembly(models.Model):
     @api.multi
     def cancel_approved_order(self):
         for order in self:
-            order.line_in_ids.action_cancel()
-
+            if order.state == 'feeding':
+                raise UserError(u'请不要重复撤销')
+            # 反审核入库到废品仓的移库单
             wh_internal = self.env['wh.internal'].search([('ref', '=', order.move_id.name)])
             if wh_internal:
                 wh_internal.cancel_approved_order()
                 wh_internal.unlink()
+            order.line_in_ids.action_draft()
 
             # 删除入库凭证
             voucher, order.voucher_id = order.voucher_id, False
@@ -421,7 +427,7 @@ class WhAssembly(models.Model):
                     'goods_qty': line.goods_qty,
                     'cost_unit': cost_unit,
                     'cost': cost,
-                    'goods_uos_qty': self.goods_qty / line.goods_id.conversion,
+                    'goods_uos_qty': line.goods_qty / line.goods_id.conversion,
                     'uos_id': line.goods_id.uos_id.id,
                     'attribute_id': line.attribute_id.id,
                 })
@@ -652,7 +658,7 @@ class outsource(models.Model):
                     'goods_qty': line.goods_qty,
                     'cost_unit': cost_unit,
                     'cost': cost,
-                    'goods_uos_qty': self.goods_qty / line.goods_id.conversion,
+                    'goods_uos_qty': line.goods_qty / line.goods_id.conversion,
                     'uos_id': line.goods_id.uos_id.id,
                     'type': 'out',
                 })
@@ -906,6 +912,8 @@ class outsource(models.Model):
     def approve_feeding(self):
         ''' 发料 '''
         for order in self:
+            if order.state == 'feeding':
+                raise UserError(u'请不要重复发料')
             order.check_parent_length()
             order.check_is_child_enable()
 
@@ -921,6 +929,8 @@ class outsource(models.Model):
     def approve_order(self):
         ''' 成品入库 '''
         for order in self:
+            if order.state == 'done':
+                raise UserError(u'请不要重复执行成品入库')
             if order.state != 'feeding':
                 raise UserError(u'请先投料')
             order.move_id.check_qc_result()  # 检验质检报告是否上传
@@ -949,11 +959,14 @@ class outsource(models.Model):
     @api.multi
     def cancel_approved_order(self):
         for order in self:
-            order.line_in_ids.action_cancel()
+            if order.state == 'feeding':
+                raise UserError(u'请不要重复撤销')
+            # 反审核入库到废品仓的移库单
             wh_internal = self.env['wh.internal'].search([('ref', '=', order.move_id.name)])
             if wh_internal:
                 wh_internal.cancel_approved_order()
                 wh_internal.unlink()
+            order.line_in_ids.action_draft()
 
             # 删除入库凭证
             voucher, order.voucher_id = order.voucher_id, False
@@ -1205,6 +1218,8 @@ class WhDisassembly(models.Model):
     def approve_feeding(self):
         ''' 发料 '''
         for order in self:
+            if order.state == 'feeding':
+                raise UserError(u'请不要重复发料')
             order.check_parent_length()
             order.check_is_child_enable()
 
@@ -1222,6 +1237,8 @@ class WhDisassembly(models.Model):
     def approve_order(self):
         ''' 成品入库 '''
         for order in self:
+            if order.state == 'done':
+                raise UserError(u'请不要重复执行成品入库')
             if order.state != 'feeding':
                 raise UserError(u'请先投料')
             order.move_id.check_qc_result()  # 检验质检报告是否上传
@@ -1243,12 +1260,14 @@ class WhDisassembly(models.Model):
     @api.multi
     def cancel_approved_order(self):
         for order in self:
-            order.line_in_ids.action_cancel()
+            if order.state == 'feeding':
+                raise UserError(u'请不要重复撤销')
+            # 反审核入库到废品仓的移库单
             wh_internal = self.env['wh.internal'].search([('ref', '=', order.move_id.name)])
             if wh_internal:
                 wh_internal.cancel_approved_order()
                 wh_internal.unlink()
-
+            order.line_in_ids.action_draft()
             # 删除入库凭证
             voucher, order.voucher_id = order.voucher_id, False
             if voucher.state == 'done':
@@ -1491,6 +1510,15 @@ class WhBom(osv.osv):
         default=lambda self: self.env['res.company']._company_default_get())
     goods_id = fields.Many2one('goods', related='line_parent_ids.goods_id', string=u'组合商品')
 
+    @api.one
+    @api.constrains('line_parent_ids', 'line_child_ids')
+    def check_parent_child_unique(self):
+        """判断同一个产品不能是组合件又是子件"""
+        for child_line in self.line_child_ids:
+            for parent_line in self.line_parent_ids:
+                if child_line.goods_id == parent_line.goods_id and child_line.attribute_id == parent_line.attribute_id:
+                    raise UserError(u'组合件和子件不能相同，产品:%s' % parent_line.goods_id.name)
+
 
 class WhBomLine(osv.osv):
     _name = 'wh.bom.line'
@@ -1511,6 +1539,7 @@ class WhBomLine(osv.osv):
                                help=u'子件行/组合件行上的商品')
     goods_qty = fields.Float(
         u'数量', digits=dp.get_precision('Quantity'),
+        default=1.0,
         help=u'子件行/组合件行上的商品数量')
     attribute_id = fields.Many2one('attribute', u'属性', ondelete='restrict')
     company_id = fields.Many2one(
@@ -1518,3 +1547,10 @@ class WhBomLine(osv.osv):
         string=u'公司',
         change_default=True,
         default=lambda self: self.env['res.company']._company_default_get())
+
+    @api.one
+    @api.constrains('goods_qty')
+    def check_goods_qty(self):
+        """验证商品数量大于0"""
+        if self.goods_qty <= 0:
+            raise UserError(u'商品 %s 的数量必须大于0' % self.goods_id.name)
